@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WhatsApp Blaster</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:       #0a0a0f;
+    --surface:  #111118;
+    --border:   #1e1e2e;
+    --border2:  #2a2a3e;
+    --accent:   #25d366;
+    --accent2:  #4ade80;
+    --accent3:  #f97316;
+    --text:     #e2e2f0;
+    --muted:    #6b6b8a;
+    --danger:   #f43f5e;
+    --mono:     'IBM Plex Mono', monospace;
+    --display:  'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--mono);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%231e1e2e' stroke-width='0.5'%3E%3Cpath d='M60 0H0v60'/%3E%3C/g%3E%3C/svg%3E");
+    opacity: 0.4; pointer-events: none; z-index: 0;
+  }
+
+  header {
+    position: relative; z-index: 1;
+    border-bottom: 1px solid var(--border);
+    padding: 20px 40px;
+    display: flex; align-items: center; gap: 16px;
+    background: linear-gradient(135deg, rgba(37,211,102,0.06) 0%, transparent 60%);
+  }
+  .logo-icon {
+    width: 36px; height: 36px; background: var(--accent);
+    border-radius: 8px; display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  header h1 { font-family: var(--display); font-size: 1.4rem; font-weight: 800; letter-spacing: -0.02em; }
+  header h1 span { color: var(--accent); }
+  .header-sub {
+    margin-left: auto; font-size: 0.7rem; color: var(--muted);
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--border2); color: var(--muted);
+    width: 34px; height: 34px; border-radius: 7px; font-size: 0.95rem;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--muted); }
+
+  main { position: relative; z-index: 1; max-width: 1000px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  .steps-bar {
+    display: flex; gap: 0; margin-bottom: 44px;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  }
+  .step-item {
+    flex: 1; padding: 12px 16px; display: flex; align-items: center; gap: 10px;
+    border-right: 1px solid var(--border);
+    font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted); background: var(--surface);
+    transition: all 0.2s; cursor: default; user-select: none;
+  }
+  .step-item:last-child { border-right: none; }
+  .step-num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--border2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.65rem; font-weight: 600; flex-shrink: 0; transition: all 0.2s;
+  }
+  .step-item.active { color: var(--text); background: rgba(37,211,102,0.08); }
+  .step-item.active .step-num { background: var(--accent); color: #042; }
+  .step-item.done { color: var(--accent2); }
+  .step-item.done .step-num { background: rgba(74,222,128,0.15); color: var(--accent2); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px; margin-bottom: 20px;
+    animation: slideIn 0.25s ease;
+  }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .card-label {
+    font-size: 0.65rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 16px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  label { font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 6px; letter-spacing: 0.04em; }
+  select, input[type="text"], input[type="number"] {
+    width: 100%; background: var(--bg); border: 1px solid var(--border2);
+    color: var(--text); font-family: var(--mono); font-size: 0.85rem;
+    padding: 10px 14px; border-radius: 7px; outline: none;
+    transition: border-color 0.15s; appearance: none;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .dropzone {
+    border: 2px dashed var(--border2); border-radius: 10px; padding: 36px 20px;
+    text-align: center; cursor: pointer; transition: all 0.2s; position: relative; background: var(--bg);
+  }
+  .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: rgba(37,211,102,0.04); }
+  .dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .dropzone-icon { font-size: 2rem; margin-bottom: 10px; }
+  .dropzone-text { font-size: 0.8rem; color: var(--muted); }
+  .dropzone-text strong { color: var(--accent); }
+  .dropzone.loaded { border-color: var(--accent2); background: rgba(74,222,128,0.03); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 0.8rem; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 11px 22px; border-radius: 7px; border: none;
+    cursor: pointer; transition: all 0.15s; text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: #042; }
+  .btn-primary:hover { background: #1fbe5b; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(37,211,102,0.3); }
+  .btn-primary:disabled { background: var(--border2); color: var(--muted); cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border2); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+  .btn-danger { background: rgba(244,63,94,0.12); color: var(--danger); border: 1px solid rgba(244,63,94,0.2); }
+  .btn-danger:hover { background: rgba(244,63,94,0.2); }
+  .btn-success { background: rgba(74,222,128,0.12); color: var(--accent2); border: 1px solid rgba(74,222,128,0.2); }
+  .btn-success:hover { background: rgba(74,222,128,0.2); }
+  .btn-sm { padding: 6px 12px; font-size: 0.68rem; }
+  .btn-group { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; flex-wrap: wrap; }
+
+  .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); max-height: 340px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  thead th {
+    background: var(--border); padding: 8px 12px; text-align: left;
+    font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+    position: sticky; top: 0; z-index: 2;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(37,211,102,0.04); }
+  tbody td { padding: 7px 12px; color: var(--text); }
+  tbody tr.selected-row { background: rgba(37,211,102,0.08); }
+  tbody tr.selected-row td:first-child { border-left: 2px solid var(--accent); }
+  tbody tr.row-skipped { opacity: 0.45; }
+  input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+
+  .stat-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .stat-chip { background: var(--bg); border: 1px solid var(--border2); border-radius: 6px; padding: 6px 14px; font-size: 0.72rem; color: var(--muted); }
+  .stat-chip strong { color: var(--text); }
+  .stat-chip.green { border-color: rgba(74,222,128,0.3); }
+  .stat-chip.green strong { color: var(--accent2); }
+  .stat-chip.red { border-color: rgba(244,63,94,0.3); }
+  .stat-chip.red strong { color: var(--danger); }
+  .stat-chip.orange { border-color: rgba(249,115,22,0.3); }
+  .stat-chip.orange strong { color: var(--accent3); }
+
+  .log-terminal {
+    background: #050508; border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+    font-size: 0.75rem; line-height: 1.7; max-height: 320px; overflow-y: auto; font-family: var(--mono);
+  }
+  .log-line { display: flex; gap: 10px; }
+  .log-time { color: var(--muted); flex-shrink: 0; }
+  .log-ok   { color: var(--accent2); }
+  .log-fail { color: var(--danger); }
+  .log-info { color: var(--accent); }
+  .log-warn { color: var(--accent3); }
+
+  .progress-outer { background: var(--border); border-radius: 4px; height: 6px; overflow: hidden; margin: 16px 0; }
+  .progress-inner { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s ease; }
+
+  .acc-list { display: flex; flex-direction: column; gap: 10px; }
+  .acc-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: var(--bg); border: 1px solid var(--border2); border-radius: 8px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .acc-row:hover { border-color: var(--muted); }
+  .acc-row.sel { border-color: var(--accent); background: rgba(37,211,102,0.06); }
+  .acc-main { flex: 1; }
+  .acc-num { font-size: 0.85rem; }
+  .acc-sub { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
+  .pill { font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+  .pill.ready { background: rgba(74,222,128,0.15); color: var(--accent2); }
+  .pill.app_not_running { background: rgba(244,63,94,0.15); color: var(--danger); }
+
+  .modal-back { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 200; }
+  .modal { background: var(--surface); border: 1px solid var(--border2); border-radius: 12px; padding: 28px; width: min(420px, 92vw); text-align: center; }
+  .modal h3 { font-family: var(--display); margin-bottom: 8px; }
+  .modal p { font-size: 0.75rem; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+
+  #toast {
+    position: fixed; bottom: 30px; right: 30px; padding: 12px 20px; border-radius: 8px;
+    font-size: 0.78rem; font-family: var(--mono); transform: translateY(80px); opacity: 0;
+    transition: all 0.3s; z-index: 300; max-width: 340px;
+  }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast.success { background: rgba(74,222,128,0.12); border: 1px solid var(--accent2); color: var(--accent2); }
+  #toast.error   { background: rgba(244,63,94,0.12);  border: 1px solid var(--danger);  color: var(--danger); }
+  #toast.info    { background: rgba(37,211,102,0.12); border: 1px solid var(--accent);  color: var(--accent); }
+
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: currentColor; border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .note { font-size: 0.72rem; color: var(--muted); line-height: 1.65; }
+  .note strong { color: var(--accent3); }
+  .hidden { display: none !important; }
+  .mt-12 { margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-icon">✆</div>
+  <h1>WhatsApp <span>Blaster</span></h1>
+  <div class="header-sub">Bulk Invite Automation</div>
+  <button class="icon-btn" onclick="showSettings()" title="Settings">⚙</button>
+</header>
+
+<main>
+  <div class="steps-bar" id="stepsBar">
+    <div class="step-item active" data-step="1"><div class="step-num">1</div> Connect</div>
+    <div class="step-item" data-step="2"><div class="step-num">2</div> Upload CSV</div>
+    <div class="step-item" data-step="3"><div class="step-num">3</div> Select</div>
+    <div class="step-item" data-step="4"><div class="step-num">4</div> Send</div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="card" id="step1">
+    <div class="card-label">01 / Sender Number</div>
+    <p class="note" style="margin-bottom:16px">
+      This sends through the <strong>WhatsApp Desktop app</strong>, already logged in on this PC —
+      there's no QR to scan here. Confirm the phone number it's signed in as; it's only used to
+      track sending limits and avoid re-messaging people.
+    </p>
+    <div class="acc-list" id="accList"><div class="note">Loading…</div></div>
+    <div class="btn-group mt-12" style="justify-content:flex-start">
+      <button class="btn btn-ghost" onclick="showAddNumber()">+ Add sender number</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadNumbers()">↻ Refresh</button>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-primary" id="step1Next" disabled onclick="goStep(2)">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card hidden" id="step2">
+    <div class="card-label">02 / Upload Participants CSV</div>
+    <p class="note" style="margin-bottom:16px">
+      Needs a <strong>name</strong> column and a <strong>phone</strong> column
+      (any of: phone, mobile, number, contact, whatsapp). Bare 10-digit numbers get +91 automatically.
+      S.No. always means the row's line number in your own file.
+    </p>
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="csvFile" accept=".csv" />
+      <div class="dropzone-icon" id="dzIcon">📂</div>
+      <div class="dropzone-text" id="dzText"><strong>Click to browse</strong> or drag &amp; drop your CSV</div>
+    </div>
+    <div id="csvStats" class="hidden mt-12">
+      <div class="stat-row">
+        <div class="stat-chip green">Sendable <strong id="statPending">—</strong></div>
+        <div class="stat-chip orange">Skipped <strong id="statSkipped">—</strong></div>
+        <div class="stat-chip">File <strong id="fileName">—</strong></div>
+      </div>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="goStep(1)">← Back</button>
+      <button class="btn btn-primary" id="step2Next" disabled onclick="goStep(3)">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="card hidden" id="step3">
+    <div class="card-label">03 / Select Recipients by S.No.</div>
+    <div class="stat-row">
+      <div class="stat-chip green">Selected <strong id="selCount">0</strong></div>
+      <div class="stat-chip">Total rows <strong id="rowCount">0</strong></div>
+    </div>
+    <div class="row-2" style="margin-bottom:14px">
+      <div><label>From S.No.</label><input type="number" id="fromSno" min="1" placeholder="e.g. 1" /></div>
+      <div><label>To S.No.</label><input type="number" id="toSno" min="1" placeholder="e.g. 50" /></div>
+    </div>
+    <div class="btn-group" style="margin-top:0; justify-content:flex-start">
+      <button class="btn btn-ghost btn-sm" onclick="applyRange()">Apply range</button>
+      <button class="btn btn-ghost btn-sm" onclick="selectAll(true)">Select all</button>
+      <button class="btn btn-ghost btn-sm" onclick="selectAll(false)">Clear</button>
+    </div>
+    <div class="table-wrap mt-12" id="selTableWrap"></div>
+    <div class="btn-group">
+      <button class="btn btn-ghost" onclick="goStep(2)">← Back</button>
+      <button class="btn btn-primary" id="step3Next" disabled onclick="goStep(4)">Confirm &amp; Proceed →</button>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="card hidden" id="step4">
+    <div class="card-label">04 / Send Invites</div>
+    <div class="stat-row">
+      <div class="stat-chip">Sender <strong id="sendFrom">—</strong></div>
+      <div class="stat-chip green">Submitted <strong id="cSent">0</strong></div>
+      <div class="stat-chip red">Failed <strong id="cUnknown">0</strong></div>
+      <div class="stat-chip orange">Skipped <strong id="cSkipped">0</strong></div>
+      <div class="stat-chip">Queued <strong id="cTotal">0</strong></div>
+    </div>
+
+    <p class="note" style="margin-bottom:14px">
+      This drives the <strong>WhatsApp Desktop app</strong> directly — keep its window visible and
+      don't touch the mouse/keyboard while a batch runs. WhatsApp Desktop has no delivery status
+      this app can read, so <strong>Submitted</strong> means the message was typed and sent, not
+      that arrival is confirmed — watch the app window to verify. Paced 8–20s apart with a longer
+      pause every 50, and the run stops automatically after 3 failures in a row.
+    </p>
+
+    <div class="progress-outer hidden" id="progressWrap"><div class="progress-inner" id="progressBar" style="width:0%"></div></div>
+
+    <div class="log-terminal" id="logTerminal">
+      <div class="log-line"><span class="log-time">[ ready ]</span><span class="log-info">Awaiting send command…</span></div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-ghost" id="backBtn" onclick="goStep(3)">← Back</button>
+      <button class="btn btn-danger hidden" id="abortBtn" onclick="abortRun()">■ Abort</button>
+      <button class="btn btn-ghost hidden" id="startOverBtn" onclick="startOver()">⟲ Start over</button>
+      <button class="btn btn-ghost hidden" id="retryBtn" onclick="retryFailed()">↻ Retry failed</button>
+      <button class="btn btn-primary hidden" id="anotherBatchBtn" onclick="sendAnotherBatch()">+ Send another batch</button>
+      <button class="btn btn-success" id="sendBtn" onclick="startSend()">✆ Send Invites</button>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<div class="modal-back hidden" id="addModal">
+  <div class="modal">
+    <h3>Confirm sender number</h3>
+    <p>The number WhatsApp Desktop is signed in as on this PC.</p>
+    <input type="text" id="newPhone" placeholder="9212555156" />
+    <div class="btn-group" style="justify-content:center">
+      <button class="btn btn-ghost" onclick="closeAddModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmSenderNumber()">Confirm →</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-back hidden" id="settingsModal">
+  <div class="modal" style="width:min(480px, 92vw); text-align:left">
+    <h3 style="margin-bottom:4px">Sending settings</h3>
+    <p>Every value here is editable — there's no built-in maximum. Slower and more randomised
+      is safer; this app will not stop you from setting it faster.</p>
+
+    <div class="row-2" style="margin-bottom:14px">
+      <div><label>Min delay between sends (sec)</label><input type="number" id="setMinDelay" min="0" /></div>
+      <div><label>Max delay between sends (sec)</label><input type="number" id="setMaxDelay" min="0" /></div>
+    </div>
+    <div class="row-2" style="margin-bottom:14px">
+      <div><label>Batch size (messages)</label><input type="number" id="setBatchSize" min="1" /></div>
+      <div><label>Daily cap (per sender)</label><input type="number" id="setDailyCap" min="0" /></div>
+    </div>
+    <div style="margin-bottom:14px">
+      <label>Default country code (no +)</label>
+      <input type="text" id="setDefaultCountry" placeholder="91" />
+    </div>
+
+    <p class="note" style="margin-bottom:16px">
+      <strong>Caution:</strong> shorter delays and bigger batches raise the chance WhatsApp flags
+      or bans the sending number. These defaults are a reasonable starting point, not a guarantee.
+    </p>
+
+    <div class="btn-group" style="justify-content:center">
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSettingsForm()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let numbers = [];
+let senderId = null;
+let campaignId = null;
+let recipients = [];
+let selected = new Set();
+let sending = false;
+
+const $ = (id) => document.getElementById(id);
+
+function toast(msg, kind = 'info') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'show ' + kind;
+  setTimeout(() => (t.className = kind), 3800);
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function goStep(n) {
+  for (let i = 1; i <= 4; i++) $('step' + i).classList.toggle('hidden', i !== n);
+  document.querySelectorAll('.step-item').forEach((el) => {
+    const s = Number(el.dataset.step);
+    el.classList.toggle('active', s === n);
+    el.classList.toggle('done', s < n);
+  });
+  if (n === 4) {
+    $('sendFrom').textContent = senderId || '—';
+    $('cTotal').textContent = selected.size;
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ── step 1: numbers ───────────────────────────────────────────────────────
+async function loadNumbers() {
+  try {
+    numbers = await (await fetch('/api/numbers')).json();
+  } catch { numbers = []; }
+  const list = $('accList');
+  if (!numbers.length) {
+    list.innerHTML = '<div class="note">No numbers paired yet. Click “+ Add number”.</div>';
+    return;
+  }
+  list.innerHTML = numbers.map((n) => `
+    <div class="acc-row ${n.id === senderId ? 'sel' : ''}" onclick="pickNumber('${esc(n.id)}')">
+      <input type="radio" ${n.id === senderId ? 'checked' : ''} />
+      <div class="acc-main">
+        <div class="acc-num">${esc(n.displayName || n.phoneNumber)}</div>
+        <div class="acc-sub">${esc(n.phoneNumber)}</div>
+      </div>
+      <span class="pill ${esc(n.status)}">${esc(String(n.status).replace('_', ' '))}</span>
+      <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();removeNumber('${esc(n.id)}')">Remove</button>
+    </div>`).join('');
+}
+
+function pickNumber(id) {
+  senderId = id;
+  $('step1Next').disabled = false;
+  loadNumbers();
+}
+
+async function removeNumber(id) {
+  if (!confirm('Remove ' + id + ' from the sender list?')) return;
+  await fetch('/api/numbers/' + id, { method: 'DELETE' });
+  if (senderId === id) { senderId = null; $('step1Next').disabled = true; }
+  toast('Number removed', 'info');
+  loadNumbers();
+}
+
+function showAddNumber() { $('addModal').classList.remove('hidden'); $('newPhone').focus(); }
+function closeAddModal() { $('addModal').classList.add('hidden'); }
+
+// ── settings ──────────────────────────────────────────────────────────────
+async function showSettings() {
+  try {
+    const s = await (await fetch('/api/settings')).json();
+    $('setMinDelay').value = Math.round(s.sendMinDelayMs / 1000);
+    $('setMaxDelay').value = Math.round(s.sendMaxDelayMs / 1000);
+    $('setBatchSize').value = s.sendBatchSize;
+    $('setDailyCap').value = s.dailyCap;
+    $('setDefaultCountry').value = s.defaultCountry;
+    $('settingsModal').classList.remove('hidden');
+  } catch (e) { toast('Could not load settings: ' + e.message, 'error'); }
+}
+function closeSettings() { $('settingsModal').classList.add('hidden'); }
+
+async function saveSettingsForm() {
+  const payload = {
+    sendMinDelayMs: Math.round(Number($('setMinDelay').value) * 1000),
+    sendMaxDelayMs: Math.round(Number($('setMaxDelay').value) * 1000),
+    sendBatchSize: Number($('setBatchSize').value),
+    dailyCap: Number($('setDailyCap').value),
+    defaultCountry: $('setDefaultCountry').value.trim(),
+  };
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save settings');
+    closeSettings();
+    toast('Settings saved', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function confirmSenderNumber() {
+  const phone = $('newPhone').value.trim();
+  if (!phone) return toast('Enter the sender phone number', 'error');
+  closeAddModal();
+  try {
+    const res = await fetch('/api/numbers', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber: phone })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save sender number');
+    senderId = data.id;
+    if (!data.appRunning) {
+      toast('Saved — but WhatsApp Desktop is not running. Start it before sending.', 'error');
+    } else {
+      toast('Sender number confirmed', 'success');
+    }
+    await loadNumbers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── step 2: upload ────────────────────────────────────────────────────────
+const dz = $('dropzone');
+dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', (e) => {
+  e.preventDefault(); dz.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) { $('csvFile').files = e.dataTransfer.files; uploadCsv(); }
+});
+$('csvFile').addEventListener('change', uploadCsv);
+
+async function uploadCsv() {
+  const file = $('csvFile').files[0];
+  if (!file) return;
+  if (!senderId) return toast('Pick a sender number first', 'error');
+
+  $('dzText').innerHTML = '<span class="spinner"></span> Parsing…';
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('senderId', senderId);
+  try {
+    const res = await fetch('/api/campaigns', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    campaignId = data.campaignId;
+    $('statPending').textContent = data.summary.pending || 0;
+    $('statSkipped').textContent = data.summary.skipped || 0;
+    $('fileName').textContent = file.name;
+    $('csvStats').classList.remove('hidden');
+    dz.classList.add('loaded');
+    $('dzIcon').textContent = '✅';
+    $('dzText').innerHTML = '<strong>' + esc(file.name) + '</strong> loaded';
+    $('step2Next').disabled = false;
+    await loadRecipients();
+    toast(data.total + ' rows parsed', 'success');
+  } catch (e) {
+    $('dzIcon').textContent = '⚠️';
+    $('dzText').innerHTML = '<strong>' + esc(e.message) + '</strong>';
+    toast(e.message, 'error');
+  } finally {
+    // Clear the input so re-picking a file with the SAME name still fires
+    // `change`. Reachable now that "Send another batch" returns here.
+    $('csvFile').value = '';
+  }
+}
+
+// ── step 3: select ────────────────────────────────────────────────────────
+async function loadRecipients() {
+  const data = await (await fetch('/api/campaigns/' + campaignId)).json();
+  recipients = data.recipients;
+  selected = new Set(recipients.filter((r) => r.state === 'pending').map((r) => r.sno));
+  renderTable();
+}
+
+function renderTable() {
+  $('rowCount').textContent = recipients.length;
+  $('selTableWrap').innerHTML =
+    '<table><thead><tr><th style="width:34px"></th><th>S.No.</th><th>Name</th><th>Phone</th><th>Status</th></tr></thead><tbody>' +
+    recipients.map((r) => {
+      const skipped = r.state === 'skipped';
+      const status = skipped
+        ? '<span style="color:var(--accent3)">' + esc(r.error || 'skipped') + '</span>'
+        : r.state === 'submitted'
+        ? '<span style="color:var(--accent2)">submitted</span>'
+        : r.state === 'unknown'
+        ? '<span style="color:var(--danger)">failed</span>'
+        : '';
+      return '<tr class="' + (selected.has(r.sno) ? 'selected-row ' : '') + (skipped ? 'row-skipped' : '') + '">' +
+        '<td><input type="checkbox" ' + (selected.has(r.sno) ? 'checked ' : '') + (skipped ? 'disabled ' : '') +
+        'onchange="toggleRow(' + r.sno + ')" /></td>' +
+        '<td>' + r.sno + '</td><td>' + esc(r.name || '—') + '</td><td>' + esc(r.phone || '—') + '</td>' +
+        '<td>' + status + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  updateSelCount();
+}
+
+function toggleRow(sno) {
+  if (selected.has(sno)) selected.delete(sno); else selected.add(sno);
+  renderTable();
+}
+function selectAll(on) {
+  selected = on ? new Set(recipients.filter((r) => r.state !== 'skipped').map((r) => r.sno)) : new Set();
+  renderTable();
+}
+function applyRange() {
+  const from = Number($('fromSno').value), to = Number($('toSno').value);
+  if (!from || !to || to < from) return toast('Enter a valid S.No. range', 'error');
+  selected = new Set(recipients.filter((r) => r.state !== 'skipped' && r.sno >= from && r.sno <= to).map((r) => r.sno));
+  renderTable();
+  toast(selected.size + ' rows selected', 'info');
+}
+function updateSelCount() {
+  $('selCount').textContent = selected.size;
+  $('step3Next').disabled = selected.size === 0;
+}
+
+// ── step 4: send ──────────────────────────────────────────────────────────
+function log(text, cls = 'log-info') {
+  const term = $('logTerminal');
+  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = '<span class="log-time">[' + time + ']</span><span class="' + cls + '">' + esc(text) + '</span>';
+  term.appendChild(line);
+  term.scrollTop = term.scrollHeight;
+}
+
+async function startSend() {
+  if (sending) return;
+  if (!selected.size) return toast('Nothing selected', 'error');
+  sending = true;
+  $('sendBtn').classList.add('hidden');
+  $('backBtn').classList.add('hidden');
+  $('retryBtn').classList.add('hidden');
+  $('abortBtn').classList.remove('hidden');
+  $('progressWrap').classList.remove('hidden');
+  $('logTerminal').innerHTML = '';
+  const counts = { submitted: 0, unknown: 0, skipped: 0 };
+  let done = 0;
+  const total = selected.size;
+  log('Starting run — ' + total + ' recipients from ' + senderId);
+
+  try {
+    const res = await fetch('/api/campaigns/' + campaignId + '/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snos: [...selected] })
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done: fin } = await reader.read();
+      if (fin) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const raw of lines) {
+        if (!raw.trim()) continue;
+        const evt = JSON.parse(raw);
+        if (evt.type === 'aborted') { log('⛔ ' + evt.reason, 'log-fail'); continue; }
+        if (evt.type === 'pause') { log('… long pause ' + Math.round(evt.ms / 1000) + 's before the next batch', 'log-warn'); continue; }
+        if (evt.type === 'error') { log('Error: ' + evt.error, 'log-fail'); continue; }
+
+        counts[evt.state] = (counts[evt.state] || 0) + 1;
+        done++;
+        $('cSent').textContent = counts.submitted;
+        $('cUnknown').textContent = counts.unknown;
+        $('cSkipped').textContent = counts.skipped;
+        $('progressBar').style.width = Math.round((done / total) * 100) + '%';
+
+        const cls = evt.state === 'submitted' ? 'log-ok' : evt.state === 'skipped' ? 'log-warn' : 'log-fail';
+        const tail = evt.error ? ' — ' + evt.error : '';
+        log('S.No. ' + evt.sno + ' ' + (evt.name || '') + ' [' + (evt.phone || '') + '] → ' + evt.state + tail, cls);
+      }
+    }
+    log('Run finished. Submitted ' + counts.submitted + ' of ' + total + '. Verify delivery in the WhatsApp Desktop window.');
+    toast('Run finished — ' + counts.submitted + ' submitted', counts.submitted ? 'success' : 'error');
+  } catch (e) {
+    log('Stream failed: ' + e.message, 'log-fail');
+    toast('Send failed: ' + e.message, 'error');
+  } finally {
+    sending = false;
+    $('abortBtn').classList.add('hidden');
+    $('backBtn').classList.remove('hidden');
+    $('sendBtn').classList.remove('hidden');
+    $('retryBtn').classList.remove('hidden');
+    $('startOverBtn').classList.remove('hidden');
+    $('anotherBatchBtn').classList.remove('hidden');
+    await loadRecipients();
+  }
+}
+
+// Both post-run actions reset the same step-4 chrome, so it lives in one place.
+function resetSendUi() {
+  $('cSent').textContent = '0';
+  $('cUnknown').textContent = '0';
+  $('cSkipped').textContent = '0';
+  $('progressBar').style.width = '0%';
+  $('progressWrap').classList.add('hidden');
+  $('logTerminal').innerHTML =
+    '<div class="log-line"><span class="log-time">[ ready ]</span><span class="log-info">Awaiting send command…</span></div>';
+  ['abortBtn', 'retryBtn', 'startOverBtn', 'anotherBatchBtn'].forEach((id) => $(id).classList.add('hidden'));
+  $('sendBtn').classList.remove('hidden');
+  $('backBtn').classList.remove('hidden');
+}
+
+// Clears the wizard AND purges this sender's campaign history from the
+// shared database (scoped server-side to senderId — other teammates' history
+// on the same shared DB is untouched). WhatsApp Desktop itself is untouched.
+async function startOver() {
+  if (sending) return toast('Abort the running batch first', 'error');
+  if (!confirm('Start over? This clears your campaign history and the loaded CSV.')) return;
+
+  if (senderId) {
+    await fetch('/api/campaigns?senderId=' + encodeURIComponent(senderId), { method: 'DELETE' }).catch(() => {});
+  }
+
+  senderId = null;
+  campaignId = null;
+  recipients = [];
+  selected = new Set();
+
+  dz.classList.remove('loaded');
+  $('dzIcon').textContent = '📂';
+  $('dzText').innerHTML = '<strong>Click to browse</strong> or drag &amp; drop your CSV';
+  $('csvStats').classList.add('hidden');
+  $('csvFile').value = '';
+  $('selTableWrap').innerHTML = '';
+  $('fromSno').value = '';
+  $('toSno').value = '';
+  $('step1Next').disabled = true;
+  $('step2Next').disabled = true;
+  $('step3Next').disabled = true;
+
+  resetSendUi();
+  await loadNumbers();
+  goStep(1);
+  toast('Cleared. Pick a sender number to start again.', 'info');
+}
+
+// Keeps the number AND the campaign. Reusing the same campaign is deliberate:
+// rows sent in the last batch come back as state='submitted', and loadRecipients()
+// only pre-selects 'pending' rows, so nobody can be messaged twice. A fresh
+// campaign would throw exactly that protection away.
+async function sendAnotherBatch() {
+  if (sending) return toast('A batch is still running', 'error');
+  resetSendUi();
+  await loadRecipients();
+  goStep(2);
+  toast('Same number and CSV kept — upload a new CSV, or continue to pick the next range.', 'info');
+}
+
+async function abortRun() {
+  await fetch('/api/campaigns/' + campaignId + '/abort', { method: 'POST' });
+  log('Abort requested — finishing the current message first…', 'log-warn');
+}
+
+async function retryFailed() {
+  await loadRecipients();
+  const retry = recipients.filter((r) => r.state === 'unknown').map((r) => r.sno);
+  if (!retry.length) return toast('Nothing to retry', 'info');
+  selected = new Set(retry);
+  $('cTotal').textContent = selected.size;
+  toast(retry.length + ' unconfirmed rows re-queued', 'info');
+  startSend();
+}
+
+loadNumbers();
+</script>
+</body>
+</html>
