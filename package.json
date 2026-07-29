@@ -1,0 +1,57 @@
+{
+  "name": "rys-whatsapp-blaster",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bulk WhatsApp inviter for Rajdhani Yuva Sansad participants",
+  "main": "main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "electron": "electron .",
+    "dist": "electron-builder --publish never",
+    "release": "electron-builder --publish always"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "electron-updater": "^6.8.9",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "org.rys.whatsappblaster",
+    "productName": "RYS WhatsApp Blaster",
+    "files": [
+      "main.js",
+      "server.js",
+      "config.js",
+      "template.js",
+      "db/**/*",
+      "wa/**/*",
+      "public/**/*",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "harshkawatra11",
+      "repo": "rys-whatsapp-blaster"
+    }
+  }
+}
