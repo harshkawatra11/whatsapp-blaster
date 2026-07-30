@@ -18,13 +18,38 @@ function rowToCamel(r) {
   };
 }
 
-async function createCampaign({ senderPhone, fileName }) {
-  // SQLite RETURNING support varies by build; generating the id in JS and
-  // inserting it explicitly sidesteps that dependency entirely.
+// Creates the campaign row and inserts its recipients in ONE transaction.
+// Previously these were two independent operations — a failure partway
+// through insertRecipients (e.g. a duplicate sno violating
+// UNIQUE(campaign_id, sno)) left an orphaned "draft" campaign with zero
+// recipients behind. SQLite RETURNING support varies by build; generating
+// the id in JS and inserting it explicitly sidesteps that dependency
+// entirely.
+async function createCampaignWithRecipients({ senderPhone, fileName, rows }) {
   const id = crypto.randomUUID();
-  db.prepare(
-    `INSERT INTO campaigns (id, sender_phone, file_name, status, created_at) VALUES (?, ?, ?, 'draft', ?)`
-  ).run(id, senderPhone, fileName, Date.now());
+  db.exec("BEGIN");
+  try {
+    db.prepare(
+      `INSERT INTO campaigns (id, sender_phone, file_name, status, created_at) VALUES (?, ?, ?, 'draft', ?)`
+    ).run(id, senderPhone, fileName, Date.now());
+
+    if (rows.length > 0) {
+      const insert = db.prepare(
+        `INSERT INTO recipients (campaign_id, sno, name, phone, state, error) VALUES (?, ?, ?, ?, ?, ?)`
+      );
+      for (const r of rows) {
+        insert.run(id, r.sno, r.name, r.phone, r.state || "pending", r.error || null);
+      }
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* BEGIN may not have taken effect — the original error is what matters */
+    }
+    throw e;
+  }
   return id;
 }
 
@@ -42,27 +67,6 @@ async function getCampaign(id) {
 
 async function setCampaignStatus(id, status) {
   db.prepare("UPDATE campaigns SET status = ? WHERE id = ?").run(status, id);
-}
-
-// Postgres used unnest() for a one-round-trip bulk insert. SQLite has no
-// equivalent, but doesn't need one: a prepared statement looped inside a
-// single transaction inserted 2000 rows in 3ms in direct testing — plenty
-// fast for a CSV of this scale.
-async function insertRecipients(campaignId, rows) {
-  if (rows.length === 0) return;
-  const insert = db.prepare(
-    `INSERT INTO recipients (campaign_id, sno, name, phone, state, error) VALUES (?, ?, ?, ?, ?, ?)`
-  );
-  db.exec("BEGIN");
-  try {
-    for (const r of rows) {
-      insert.run(campaignId, r.sno, r.name, r.phone, r.state || "pending", r.error || null);
-    }
-    db.exec("COMMIT");
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
 }
 
 async function listRecipients(campaignId) {
@@ -108,10 +112,9 @@ async function purgeCampaignsForSender(senderPhone) {
 }
 
 module.exports = {
-  createCampaign,
+  createCampaignWithRecipients,
   getCampaign,
   setCampaignStatus,
-  insertRecipients,
   listRecipients,
   getRecipientsBySnos,
   updateRecipientResult,
