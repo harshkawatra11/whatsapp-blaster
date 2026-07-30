@@ -48,7 +48,7 @@ public class NoActivateForm : Form {
 }
 "@
 
-$statePath = "${STATE_FILE.replace(/\\/g, "\\\\")}"
+$statePath = '${STATE_FILE.replace(/'/g, "''")}'
 
 $form = New-Object NoActivateForm
 $form.FormBorderStyle = 'None'
@@ -98,16 +98,20 @@ $status.Location = New-Object System.Drawing.Point(10, 68)
 $form.Controls.Add($status)
 
 # Track the file's last-modified time so an unchanged file is a cheap no-op
-# each tick rather than a re-parse.
-$lastWrite = [DateTime]::MinValue
+# each tick rather than a re-parse. Must be $script:-scoped: a plain
+# assignment inside the Add_Tick scriptblock creates a NEW variable in the
+# scriptblock's own scope instead of updating this one, so the comparison
+# below never saw a change and this "optimisation" silently never
+# short-circuited a single tick.
+$script:lastWrite = [DateTime]::MinValue
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 400
 $timer.Add_Tick({
   if (-not (Test-Path -LiteralPath $statePath)) { return }
   $mtime = (Get-Item -LiteralPath $statePath).LastWriteTimeUtc
-  if ($mtime -eq $lastWrite) { return }
-  $lastWrite = $mtime
+  if ($mtime -eq $script:lastWrite) { return }
+  $script:lastWrite = $mtime
   try {
     $evt = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     if ($evt.counts) {
@@ -180,5 +184,25 @@ function stop() {
     }
   }, 1500);
 }
+
+// If the parent process dies mid-run (crash, force-kill) `stop()`'s graceful
+// done-flag + setTimeout path never runs, and this buttonless,
+// taskbar-less, always-on-top window would otherwise sit on screen with no
+// way to dismiss it short of Task Manager. `process.on("exit")` only allows
+// synchronous work, so this skips the graceful fade and kills immediately.
+process.on("exit", () => {
+  if (!child) return;
+  try {
+    child.kill();
+  } catch {
+    /* already gone */
+  }
+  child = null;
+  try {
+    fs.unlinkSync(STATE_FILE);
+  } catch {
+    /* already gone, or never created */
+  }
+});
 
 module.exports = { start, update, stop };

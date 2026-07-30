@@ -1,5 +1,4 @@
 const { spawn } = require("child_process");
-const path = require("path");
 
 // Drives the WhatsApp Desktop Windows app via keyboard automation. No new
 // dependency: everything needed (window focus, SendKeys, clipboard) ships
@@ -24,23 +23,68 @@ const path = require("path");
 // (older builds shipped plain "WhatsApp") still resolves.
 const WHATSAPP_PROCESS_FILTER = "*WhatsApp*";
 
-function runPowerShell(script) {
+// A PowerShell child blocked on a contended clipboard (Office, RDP, and
+// clipboard managers all take that lock routinely) previously hung this
+// promise forever — the send loop never advanced, the overlay never
+// stopped, and the NDJSON response never closed. 20s is generously above
+// every script's normal runtime (a few seconds of Start-Sleep at most) but
+// bounds the worst case.
+const PS_TIMEOUT_MS = 20000;
+
+function runPowerShell(script, timeoutMs = PS_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
       { windowsHide: true }
     );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", reject);
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`powershell timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    // Buffers are collected whole and decoded once at the end, not
+    // string-concatenated chunk-by-chunk — `stdout += d` invokes an
+    // implicit per-chunk toString() that can split a multi-byte character
+    // across a chunk boundary and mangle it.
+    child.stdout.on("data", (d) => stdoutChunks.push(d));
+    child.stderr.on("data", (d) => stderrChunks.push(d));
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
+    });
     child.on("close", (code) => {
-      if (code !== 0) return reject(new Error(stderr.trim() || `powershell exited ${code}`));
-      resolve(stdout.trim());
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      if (code !== 0) return reject(new Error(stderr || `powershell exited ${code}`));
+      resolve(stdout);
     });
   });
+}
+
+// For scripts whose final Write-Output is base64(UTF-16LE) rather than plain
+// text. Necessary because PowerShell's stdout is written through the console
+// codepage (not UTF-8), so any non-ASCII character in returned text — an
+// em-dash, a curly quote, an emoji, an accent — comes back corrupted
+// otherwise. Reproduced directly: "café" round-tripped as "caf�" over plain
+// stdout, and came back correct once routed through this path. This matters
+// specifically because the message template became user-editable, and a
+// plain hardcoded ASCII template was masking the bug.
+async function runPowerShellUnicode(script) {
+  const b64 = await runPowerShell(script);
+  if (!b64) return "";
+  return Buffer.from(b64, "base64").toString("utf16le");
 }
 
 // Shared PowerShell preamble: Win32 focus/foreground helpers plus the two
@@ -249,7 +293,7 @@ function similarity(a, b) {
   if (a.length === 0 || b.length === 0) return 0;
   const maxLen = Math.max(a.length, b.length);
   const minLen = Math.min(a.length, b.length);
-  let matches = maxLen - minLen === 0 ? 0 : -(maxLen - minLen); // length gap counts against the score
+  let matches = minLen - maxLen; // length gap counts against the score (0 when lengths are equal)
   for (let i = 0; i < minLen; i++) if (a[i] === b[i]) matches++;
   return Math.max(0, matches) / maxLen;
 }
@@ -280,9 +324,11 @@ Start-Sleep -Milliseconds 250
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("^c")
 Start-Sleep -Milliseconds 400
-try { Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { "" }
+$captured = try { Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { $null }
+if ($null -eq $captured) { $captured = "" }
+[Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($captured))
 `;
-  const got = await runPowerShell(script);
+  const got = await runPowerShellUnicode(script);
   const score = similarity(normaliseLineEndings(text), normaliseLineEndings(got));
   return { ok: score >= VERIFY_SIMILARITY_THRESHOLD, got, score };
 }
@@ -328,12 +374,25 @@ async function resetToCleanState() {
 
 // Save/restore the operator's clipboard around a whole run — verifyComposer
 // and pasteIntoComposer both overwrite it repeatedly in the meantime.
+// Returns null (not "") on failure, distinctly from a genuinely empty
+// clipboard — setClipboard treats null as "don't touch it", so a transient
+// PowerShell failure here can't overwrite the operator's real clipboard with
+// emptiness, which is the exact harm this save/restore exists to prevent.
 async function getClipboard() {
-  return runPowerShell(`try { Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { "" }`).catch(() => "");
+  try {
+    return await runPowerShellUnicode(`
+$captured = try { Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { $null }
+if ($null -eq $captured) { $captured = "" }
+[Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($captured))
+`);
+  } catch {
+    return null;
+  }
 }
 
 async function setClipboard(text) {
-  const b64 = Buffer.from(text || "", "utf16le").toString("base64");
+  if (text === null || text === undefined) return;
+  const b64 = Buffer.from(text, "utf16le").toString("base64");
   await runPowerShell(
     `$bytes = [Convert]::FromBase64String('${b64}'); Set-Clipboard -Value ([System.Text.Encoding]::Unicode.GetString($bytes))`
   ).catch(() => {});
