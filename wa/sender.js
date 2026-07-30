@@ -32,6 +32,21 @@ function randomDelay(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
+// The batch pause can be up to 4 minutes of otherwise-uninterruptible sleep,
+// and isAborted() was only ever checked at the top of the loop — so hitting
+// Abort during a pause did nothing until the whole pause finished. Sleeping
+// in short steps and re-checking between them makes Abort responsive
+// everywhere, not just between sends.
+async function abortableSleep(ms, isAborted) {
+  const step = 500;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (isAborted()) return;
+    await sleep(Math.min(step, ms - elapsed));
+    elapsed += step;
+  }
+}
+
 async function sendOne(phone, text) {
   const digits = String(phone).replace(/\D/g, "");
   try {
@@ -86,7 +101,11 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
     await desktop.focus();
   } catch (e) {
     onEvent({ type: "aborted", reason: `could not focus WhatsApp Desktop: ${e.message}` });
-    return;
+    // Distinguishes an internal stop from a normal finish so the caller can
+    // persist the campaign's real status instead of defaulting to "done"
+    // (server.js previously derived status only from the operator-abort
+    // flag, so a focus failure with zero sends was still recorded as done).
+    return { stoppedEarly: true, reason: "focus_failed" };
   }
 
   // verifyComposer/pasteIntoComposer repeatedly overwrite the clipboard for
@@ -103,6 +122,9 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
   const tally = { submitted: 0, unknown: 0, skipped: 0 };
   const overlayCounts = () => ({ ...tally, remaining: total - tally.submitted - tally.unknown - tally.skipped });
   overlay.start();
+
+  let stoppedEarly = false;
+  let stopReason = null;
 
   try {
     for (const row of recipients) {
@@ -135,7 +157,7 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
 
       attempts++;
       overlay.update({ counts: overlayCounts(), current: `${row.name || "?"} (${row.phone})`, status: "sending..." });
-      const text = buildMessageText(row);
+      const text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
       const result = await sendOne(row.phone, text);
 
       const state = result.outcome === "submitted" ? "submitted" : "unknown";
@@ -167,6 +189,8 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
           reason: `${CONSECUTIVE_FAIL_LIMIT} consecutive failures — stopping (e.g. WhatsApp lost focus)`,
         });
         overlay.update({ status: "aborted — too many consecutive failures" });
+        stoppedEarly = true;
+        stopReason = "consecutive_failures";
         break;
       }
 
@@ -174,17 +198,23 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
         const pause = randomDelay(120000, 240000);
         onEvent({ type: "pause", ms: pause });
         overlay.update({ status: `paused ${Math.round(pause / 1000)}s before the next batch` });
-        await sleep(pause);
+        await abortableSleep(pause, isAborted);
       } else {
         const delay = randomDelay(settings.sendMinDelayMs, settings.sendMaxDelayMs);
         overlay.update({ status: `next send in ${Math.round(delay / 1000)}s` });
-        await sleep(delay);
+        await abortableSleep(delay, isAborted);
       }
     }
   } finally {
     overlay.stop();
+    // getClipboard() returns null (not "") when the read itself failed —
+    // setClipboard() treats null as "leave it alone" so a transient
+    // PowerShell failure at the start of the run can't stomp the operator's
+    // real clipboard with emptiness here.
     await desktop.setClipboard(originalClipboard);
   }
+
+  return { stoppedEarly, reason: stopReason };
 }
 
-module.exports = { runCampaign, sendOne };
+module.exports = { runCampaign };
