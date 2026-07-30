@@ -52,6 +52,7 @@ if (!gotLock) {
       minWidth: 860,
       minHeight: 640,
       title: "RYS WhatsApp Blaster",
+      icon: path.join(__dirname, "build", "icon.ico"),
       autoHideMenuBar: true,
       webPreferences: {
         contextIsolation: true,

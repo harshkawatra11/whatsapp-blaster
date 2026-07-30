@@ -34,6 +34,7 @@
       "db/**/*",
       "wa/**/*",
       "public/**/*",
+      "build/icon.ico",
       "node_modules/**/*"
     ],
     "directories": {
@@ -41,12 +42,15 @@
     },
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "icon": "build/icon.ico",
+      "signExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "publish": {
       "provider": "github",
