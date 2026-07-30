@@ -1,4 +1,5 @@
 const db = require("./pool");
+const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("../template");
 
 // User-tunable send settings, editable from the app's Settings panel. This
 // replaces .env-only pacing config — a packaged app's working directory is
@@ -11,6 +12,8 @@ const DEFAULTS = {
   sendBatchSize: 50,
   dailyCap: 200,
   defaultCountry: "91",
+  messageTemplate: DEFAULT_TEMPLATE,
+  nameFallback: DEFAULT_NAME_FALLBACK,
 };
 
 const NUMERIC_KEYS = new Set(["sendMinDelayMs", "sendMaxDelayMs", "sendBatchSize", "dailyCap"]);
@@ -19,7 +22,14 @@ async function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const stored = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   const merged = { ...DEFAULTS, ...stored };
-  for (const key of NUMERIC_KEYS) merged[key] = Number(merged[key]);
+  for (const key of NUMERIC_KEYS) {
+    const n = Number(merged[key]);
+    // A corrupt/non-numeric stored value previously became NaN here and
+    // silently disabled whatever depended on it downstream — e.g.
+    // `remaining = dailyCap - sent` becomes NaN, and `NaN <= 0` is false,
+    // so the daily cap stopped applying with no error anywhere.
+    merged[key] = Number.isFinite(n) ? n : DEFAULTS[key];
+  }
   return merged;
 }
 
@@ -27,14 +37,46 @@ async function saveSettings(partial) {
   const current = await getSettings();
   const next = { ...current, ...partial };
 
+  // Type-checking MUST run before the min/max comparison below. String
+  // input ("8000" vs "20000") previously hit the comparison first, which
+  // compares lexicographically — "20000" < "8000" is true — and threw a
+  // misleading "max must be >= min" error for what was actually a type
+  // problem.
+  for (const key of NUMERIC_KEYS) {
+    if (!Number.isFinite(next[key])) {
+      throw new Error(`${key} must be a number`);
+    }
+  }
+  if (next.sendBatchSize < 1) {
+    // 0 previously passed a ">= 0" check, then `attempts % 0` is NaN in the
+    // send loop, so `=== 0` was never true and the long batch pause simply
+    // never fired — no error, no warning, just silently faster sending.
+    throw new Error("Batch size must be at least 1");
+  }
+  for (const key of NUMERIC_KEYS) {
+    if (key === "sendBatchSize") continue;
+    if (next[key] < 0) throw new Error(`${key} must be a non-negative number`);
+  }
   if (next.sendMaxDelayMs < next.sendMinDelayMs) {
     throw new Error("Max delay must be >= min delay");
   }
-  for (const key of NUMERIC_KEYS) {
-    if (!Number.isFinite(next[key]) || next[key] < 0) {
-      throw new Error(`${key} must be a non-negative number`);
-    }
+
+  // defaultCountry was previously unvalidated and flowed straight into
+  // phone-number construction (wa/audience.js) — garbage in here silently
+  // corrupted every 10-digit phone in the next uploaded CSV.
+  const country = String(next.defaultCountry ?? "").trim();
+  if (!/^\d{1,4}$/.test(country)) {
+    throw new Error("Default country code must be 1-4 digits, no + or spaces");
   }
+  next.defaultCountry = country;
+
+  const template = String(next.messageTemplate ?? "").trim();
+  if (!template) {
+    throw new Error("Message template cannot be empty");
+  }
+  next.messageTemplate = String(next.messageTemplate);
+
+  next.nameFallback = String(next.nameFallback ?? DEFAULT_NAME_FALLBACK).trim() || DEFAULT_NAME_FALLBACK;
 
   const upsert = db.prepare(
     `INSERT INTO settings (key, value) VALUES (?, ?)
@@ -47,10 +89,31 @@ async function saveSettings(partial) {
     }
     db.exec("COMMIT");
   } catch (e) {
-    db.exec("ROLLBACK");
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* BEGIN may not have taken effect — the original error is what matters */
+    }
     throw e;
   }
   return next;
 }
 
-module.exports = { getSettings, saveSettings, DEFAULTS };
+// Writes messageTemplate into the DB once, on first run only, rather than
+// letting it fall back to DEFAULT_TEMPLATE at read time like the other
+// settings do. This matters specifically for the template: if it only ever
+// fell back to the code default, shipping an update with different default
+// wording would silently rewrite the message for every user who had never
+// edited it themselves. Seeding makes the DB row the sole source of truth
+// from the very first launch — "not one word changes" until a user
+// explicitly edits and saves.
+function seedTemplateIfMissing() {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get("messageTemplate");
+  if (row) return;
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO NOTHING`
+  ).run("messageTemplate", DEFAULT_TEMPLATE);
+}
+
+module.exports = { getSettings, saveSettings, seedTemplateIfMissing };

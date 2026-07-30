@@ -1,35 +1,41 @@
-// This is a single-campaign internal tool for one event, not a multi-template
-// product — the message is intentionally hardcoded here rather than made
-// configurable through the UI or database.
+// The message is now user-editable from the app's Settings/Template panel
+// and stored in the `settings` table (db/settings.js) — NOT here. This file
+// only holds the built-in default (used to seed the DB on first run, and as
+// the "Reset to default" target) and the fill logic. A packaged app's files
+// are inside a read-only asar, so a template that had to be edited by
+// changing this file would be unreachable for a non-technical teammate —
+// the same reason pacing settings were moved out of .env earlier.
 //
-// Text only. Sending happens by driving WhatsApp Web's real UI, where
-// attaching an image means scripting the file picker and its preview dialog;
-// that is a materially more fragile flow and this campaign does not need it.
-const TEMPLATE = {
-  // No leading "- " on its own line anywhere in here: WhatsApp Desktop's
-  // composer auto-converts "- " at the start of a line into a bullet "* "
-  // as you type/paste (its own rich-text autoformatting). That silently
-  // changed the actual composer content vs what was pasted and made every
-  // send fail composer verification — diagnosed by dumping verifyComposer's
-  // raw capture and diffing it against the source text character-by-character.
-  text: `Hi {{name}},
+// Text only, no poster image — see the decision log (docs/decisions.md).
+const DEFAULT_TEMPLATE = `Hi {{name}},
 
 You're invited to Rajdhani Yuva Sansad (MUN)! We're excited to have you join us as a participant.
 
 Please keep an eye on this chat for further event details, and reply here if you have any questions.
 
-Team RYS`,
-};
+Team RYS`;
 
-function fillTemplate(text, row) {
+const DEFAULT_NAME_FALLBACK = "there";
+
+function fillTemplate(text, row, nameFallback) {
   return text.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-    if (row[key] === undefined || row[key] === null || row[key] === "") return match;
-    return String(row[key]);
+    let value = row[key];
+    // A blank CSV name cell previously left the literal "{{name}}" in a real
+    // send ("Hi {{name}},") — substitute the configured fallback instead,
+    // but only for `name`; an unknown/blank placeholder for any other field
+    // still passes through untouched, which is a template-authoring signal
+    // worth leaving visible.
+    if ((value === undefined || value === null || value === "") && key === "name") {
+      value = nameFallback || DEFAULT_NAME_FALLBACK;
+    }
+    if (value === undefined || value === null || value === "") return match;
+    return String(value);
   });
 }
 
-function buildMessageText(row) {
-  return fillTemplate(TEMPLATE.text, row);
+function buildMessageText(row, templateText, nameFallback) {
+  const text = templateText || DEFAULT_TEMPLATE;
+  return fillTemplate(text, row, nameFallback || DEFAULT_NAME_FALLBACK);
 }
 
-module.exports = { buildMessageText };
+module.exports = { buildMessageText, DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK };

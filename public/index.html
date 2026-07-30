@@ -104,14 +104,39 @@
   .card-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
   label { font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 6px; letter-spacing: 0.04em; }
-  select, input[type="text"], input[type="number"] {
+  select, input[type="text"], input[type="number"], textarea {
     width: 100%; background: var(--bg); border: 1px solid var(--border2);
     color: var(--text); font-family: var(--mono); font-size: 0.85rem;
     padding: 10px 14px; border-radius: 7px; outline: none;
     transition: border-color 0.15s; appearance: none;
   }
-  select:focus, input:focus { border-color: var(--accent); }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 180px; line-height: 1.65; }
   .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip {
+    font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 0.03em; padding: 5px 11px; border-radius: 20px;
+    background: rgba(37,211,102,0.1); border: 1px solid rgba(37,211,102,0.3);
+    color: var(--accent); cursor: pointer; transition: all 0.15s;
+  }
+  .chip:hover { background: rgba(37,211,102,0.18); border-color: var(--accent); }
+
+  .preview-box {
+    background: var(--bg); border: 1px solid var(--border2); border-radius: 8px;
+    padding: 14px 16px; font-size: 0.82rem; line-height: 1.6; color: var(--text);
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto;
+  }
+  .preview-label {
+    font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  .tpl-warn {
+    font-size: 0.72rem; color: var(--accent3); background: rgba(249,115,22,0.08);
+    border: 1px solid rgba(249,115,22,0.25); border-radius: 7px; padding: 8px 12px;
+    margin-top: 10px; line-height: 1.5;
+  }
 
   .dropzone {
     border: 2px dashed var(--border2); border-radius: 10px; padding: 36px 20px;
@@ -252,6 +277,33 @@
       <button class="btn btn-ghost" onclick="showAddNumber()">+ Add sender number</button>
       <button class="btn btn-ghost btn-sm" onclick="loadNumbers()">↻ Refresh</button>
     </div>
+
+    <div class="card-label" style="margin-top:28px">01B / Message Template</div>
+    <p class="note" style="margin-bottom:12px">
+      This is the exact message every recipient gets. Click a chip below to insert a field —
+      it fills in automatically per person. No <code>{{ }}</code> typing needed.
+    </p>
+    <div class="chip-row">
+      <button type="button" class="chip" onclick="insertChip('name')">+ Name</button>
+      <button type="button" class="chip" onclick="insertChip('sno')">+ S.No.</button>
+      <button type="button" class="chip" onclick="insertChip('phone')">+ Phone</button>
+    </div>
+    <textarea id="tplText" rows="9" oninput="renderTplPreview()"></textarea>
+    <div id="tplWarn" class="tpl-warn hidden"></div>
+
+    <div style="margin-top:14px; margin-bottom:14px; max-width:260px">
+      <label>If a recipient's name is blank, use</label>
+      <input type="text" id="tplFallback" placeholder="there" oninput="renderTplPreview()" />
+    </div>
+
+    <div class="preview-label">Preview — as it will look to a real recipient</div>
+    <div class="preview-box" id="tplPreview"></div>
+
+    <div class="btn-group" style="justify-content:flex-start">
+      <button class="btn btn-ghost btn-sm" id="tplResetBtn" onclick="resetTemplate()">⟲ Reset to default</button>
+      <button class="btn btn-primary btn-sm" id="tplSaveBtn" onclick="saveTemplate()">Save message</button>
+    </div>
+
     <div class="btn-group">
       <button class="btn btn-primary" id="step1Next" disabled onclick="goStep(2)">Continue →</button>
     </div>
@@ -496,6 +548,104 @@ async function saveSettingsForm() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+// ── message template ─────────────────────────────────────────────────────
+const TPL_SAMPLE_ROW = { sno: 1, name: 'Priya Sharma', phone: '9876543210' };
+
+// Mirrors template.js's fillTemplate() exactly, so the preview shown here
+// matches what actually gets sent — kept in sync deliberately since this
+// runs in the browser and can't require the server-side module.
+function fillTemplatePreview(text, row, fallback) {
+  return String(text || '').replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    let value = row[key];
+    if ((value === undefined || value === null || value === '') && key === 'name') {
+      value = fallback || 'there';
+    }
+    if (value === undefined || value === null || value === '') return match;
+    return String(value);
+  });
+}
+
+function renderTplPreview() {
+  const text = $('tplText').value;
+  const fallback = $('tplFallback').value.trim();
+  // Real data from the CSV once one's loaded, so the preview isn't just a
+  // hypothetical — otherwise a blank name in the actual file wouldn't be
+  // visible until a real send.
+  const row = recipients.length ? recipients[0] : TPL_SAMPLE_ROW;
+  $('tplPreview').textContent = fillTemplatePreview(text, row, fallback) || '(empty — recipients would get nothing)';
+
+  const warnings = [];
+  if (!text.trim()) warnings.push('The message is empty — it will be rejected when you try to save.');
+  if (/^- /m.test(text)) {
+    warnings.push('A line starts with "- " — WhatsApp’s own app rewrites that into a bullet as it’s pasted, which can make a send get reported as failed. Consider removing it.');
+  }
+  if (text.trim() && text.trim().length < 40) {
+    warnings.push('This message is quite short — very short messages are more likely to trip a false failure. Not a hard block, just a heads up.');
+  }
+  const warnEl = $('tplWarn');
+  if (warnings.length) {
+    warnEl.textContent = '⚠ ' + warnings.join('  ·  ');
+    warnEl.classList.remove('hidden');
+  } else {
+    warnEl.classList.add('hidden');
+  }
+}
+
+function insertChip(field) {
+  const el = $('tplText');
+  const token = '{{' + field + '}}';
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  el.value = el.value.slice(0, start) + token + el.value.slice(end);
+  const pos = start + token.length;
+  el.focus();
+  el.setSelectionRange(pos, pos);
+  renderTplPreview();
+}
+
+async function loadTemplate() {
+  try {
+    const s = await (await fetch('/api/settings')).json();
+    $('tplText').value = s.messageTemplate || '';
+    $('tplFallback').value = s.nameFallback || 'there';
+    renderTplPreview();
+  } catch (e) { toast('Could not load the message template: ' + e.message, 'error'); }
+}
+
+async function resetTemplate() {
+  if (sending) return toast('A batch is still running', 'error');
+  try {
+    const d = await (await fetch('/api/template/default')).json();
+    $('tplText').value = d.messageTemplate;
+    $('tplFallback').value = d.nameFallback;
+    renderTplPreview();
+    toast('Reverted to the default message — click Save to keep it', 'info');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function saveTemplate() {
+  if (sending) return toast('A batch is still running', 'error');
+  const messageTemplate = $('tplText').value;
+  if (!messageTemplate.trim()) return toast('The message can’t be empty', 'error');
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageTemplate, nameFallback: $('tplFallback').value.trim() || 'there' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save the message');
+    toast('Message saved', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Settings/template edits during a run wouldn't take effect anyway —
+// runCampaign() reads them once at the start — so disabling avoids a
+// confusing no-op edit mid-batch, matching the guards already on
+// startOver()/sendAnotherBatch().
+function setTemplateEditorDisabled(disabled) {
+  ['tplText', 'tplFallback', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
+}
+
 async function confirmSenderNumber() {
   const phone = $('newPhone').value.trim();
   if (!phone) return toast('Enter the sender phone number', 'error');
@@ -568,6 +718,7 @@ async function loadRecipients() {
   recipients = data.recipients;
   selected = new Set(recipients.filter((r) => r.state === 'pending').map((r) => r.sno));
   renderTable();
+  renderTplPreview(); // switch the preview from the sample row to real CSV data
 }
 
 function renderTable() {
@@ -627,6 +778,7 @@ async function startSend() {
   if (sending) return;
   if (!selected.size) return toast('Nothing selected', 'error');
   sending = true;
+  setTemplateEditorDisabled(true);
   $('sendBtn').classList.add('hidden');
   $('backBtn').classList.add('hidden');
   $('retryBtn').classList.add('hidden');
@@ -678,6 +830,7 @@ async function startSend() {
     toast('Send failed: ' + e.message, 'error');
   } finally {
     sending = false;
+    setTemplateEditorDisabled(false);
     $('abortBtn').classList.add('hidden');
     $('backBtn').classList.remove('hidden');
     $('sendBtn').classList.remove('hidden');
@@ -732,6 +885,11 @@ async function startOver() {
 
   resetSendUi();
   await loadNumbers();
+  // Deliberately NOT calling loadTemplate() here — Start Over clears this
+  // sender's campaign history, never the saved message template. The
+  // preview just needs to fall back from the (now-cleared) real CSV row
+  // back to the sample row.
+  renderTplPreview();
   goStep(1);
   toast('Cleared. Pick a sender number to start again.', 'info');
 }
@@ -764,6 +922,7 @@ async function retryFailed() {
 }
 
 loadNumbers();
+loadTemplate();
 </script>
 </body>
 </html>
