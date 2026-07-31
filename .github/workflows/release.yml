@@ -48,3 +48,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --publish always
+
+      # electron-builder always publishes as a DRAFT — GitHub's API refuses
+      # to create a non-draft release directly against a tag that doesn't
+      # exist yet, which a fresh version's tag never does. A draft release
+      # is invisible to electron-updater (it only looks at published
+      # releases), so it has to be un-drafted as a separate step once the
+      # tag genuinely exists.
+      - name: Publish the release (un-draft)
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v${{ steps.version.outputs.version }}" --repo "${{ github.repository }}" --draft=false
