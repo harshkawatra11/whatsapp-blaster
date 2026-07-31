@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS recipients (
   state TEXT NOT NULL DEFAULT 'pending',
   error TEXT,
   sent_at INTEGER,
+  -- Per-row overrides of the event-level poster/brochure settings, present
+  -- only when the CSV had a POSTER LINK / ATTACHMENT LINK column. Added via
+  -- a guarded ALTER TABLE below, not here — see migrateAddColumnIfMissing.
   UNIQUE(campaign_id, sno)
 );
 
@@ -51,8 +54,24 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
+// CREATE TABLE IF NOT EXISTS does nothing for a table that already exists —
+// every install shipped before this column existed has a live database, so
+// adding it to the DDL string alone would give those installs
+// "no such column" on every insert the moment they update. ALTER TABLE ADD
+// COLUMN has no IF NOT EXISTS form in SQLite, so existence is checked via
+// PRAGMA table_info first. This is the first schema change since release;
+// every future one should follow this same guarded-migration pattern rather
+// than editing the base DDL in place.
+function migrateAddColumnIfMissing(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
 function ensureSchema() {
   db.exec(DDL);
+  migrateAddColumnIfMissing("recipients", "poster_link", "TEXT");
+  migrateAddColumnIfMissing("recipients", "brochure_link", "TEXT");
   console.log("   Schema ready (wa_sessions, campaigns, recipients, settings).");
 }
 
