@@ -241,6 +241,16 @@
   .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: currentColor; border-radius: 50%; animation: spin 0.6s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  #updateBanner {
+    display: flex; align-items: center; gap: 14px; padding: 10px 24px;
+    background: rgba(37,211,102,0.08); border-bottom: 1px solid var(--border2);
+    font-size: 0.75rem; font-family: var(--mono);
+  }
+  #updateBanner.hidden { display: none; }
+  #updateBanner .progress-outer { flex: 1; max-width: 220px; margin: 0; }
+  #updateBanner .btn { padding: 4px 14px; font-size: 0.72rem; }
+  #appVersion { color: var(--muted); font-size: 0.62rem; margin-left: auto; }
+
   .note { font-size: 0.72rem; color: var(--muted); line-height: 1.65; }
   .note strong { color: var(--accent3); }
   .hidden { display: none !important; }
@@ -253,8 +263,15 @@
   <div class="logo-icon">✆</div>
   <h1>WhatsApp <span>Blaster</span></h1>
   <div class="header-sub">Bulk Invite Automation</div>
+  <span id="appVersion"></span>
   <button class="icon-btn" onclick="showSettings()" title="Settings">⚙</button>
 </header>
+
+<div id="updateBanner" class="hidden">
+  <span id="updateBannerText"></span>
+  <div class="progress-outer hidden" id="updateBannerProgressWrap"><div class="progress-inner" id="updateBannerProgress" style="width:0%"></div></div>
+  <button class="btn btn-primary hidden" id="updateBannerBtn" onclick="installUpdate()">Restart &amp; install now</button>
+</div>
 
 <main>
   <div class="steps-bar" id="stepsBar">
@@ -985,8 +1002,70 @@ async function retryFailed() {
   startSend();
 }
 
+// ── auto-update ───────────────────────────────────────────────────────────
+// Polled rather than pushed — the renderer has no IPC channel to Electron's
+// main process (no preload script; this page just loads main's own local
+// HTTP server), so update-status.js is the only bridge. Standalone `node
+// server.js` (no Electron) always reports state "idle" here, which is
+// correctly invisible — nothing to show without a real updater running.
+let updateLastState = null;
+async function pollUpdateStatus() {
+  let s;
+  try {
+    s = await (await fetch('/api/update-status')).json();
+  } catch (e) {
+    return; // transient — try again next tick, never surface a poll failure
+  }
+
+  if (s.currentVersion) $('appVersion').textContent = 'v' + s.currentVersion;
+
+  const banner = $('updateBanner');
+  const text = $('updateBannerText');
+  const progressWrap = $('updateBannerProgressWrap');
+  const progressBar = $('updateBannerProgress');
+  const btn = $('updateBannerBtn');
+
+  if (s.state === 'idle' || s.state === 'checking' || s.state === 'up-to-date' || s.state === 'error') {
+    banner.classList.add('hidden');
+  } else if (s.state === 'available') {
+    banner.classList.remove('hidden');
+    text.textContent = 'Update v' + s.version + ' found — starting download…';
+    progressWrap.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    btn.classList.add('hidden');
+  } else if (s.state === 'downloading') {
+    banner.classList.remove('hidden');
+    text.textContent = 'Downloading update v' + s.version + '… ' + (s.percent || 0) + '%';
+    progressWrap.classList.remove('hidden');
+    progressBar.style.width = (s.percent || 0) + '%';
+    btn.classList.add('hidden');
+  } else if (s.state === 'downloaded') {
+    banner.classList.remove('hidden');
+    text.textContent = 'Update v' + s.version + ' ready to install.';
+    progressWrap.classList.add('hidden');
+    btn.classList.remove('hidden');
+    if (updateLastState !== 'downloaded') toast('Update v' + s.version + ' ready — restart to install', 'success');
+  }
+  updateLastState = s.state;
+
+  // Fast polling only while something is actively moving — no point
+  // hammering the endpoint the rest of the time.
+  const interval = (s.state === 'downloading' || s.state === 'checking') ? 1000 : 30000;
+  setTimeout(pollUpdateStatus, interval);
+}
+
+async function installUpdate() {
+  try {
+    await fetch('/api/update-install', { method: 'POST' });
+    toast('Installing — the app will restart shortly…', 'info');
+  } catch (e) {
+    toast('Could not start install: ' + e.message, 'error');
+  }
+}
+
 loadNumbers();
 loadTemplate();
+pollUpdateStatus();
 </script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 const path = require("path");
 const { app, BrowserWindow, dialog, shell } = require("electron");
+const updateStatus = require("./update-status");
 
 // Pinned explicitly, before app.getPath('userData') is ever read, so the
 // database path can never drift if the display name (productName) changes
@@ -25,6 +26,10 @@ if (!gotLock) {
 } else {
   let mainWindow = null;
   let serverOrigin = null;
+  // Lifted out of createWindow — checkForUpdates (defined below, outside
+  // createWindow) needs it for the "send-finished"/"install-update"
+  // listeners, and it must only ever be required/wired up once anyway.
+  let events = null;
 
   app.on("second-instance", () => {
     if (mainWindow) {
@@ -47,7 +52,7 @@ if (!gotLock) {
   }
 
   async function createWindow() {
-    let startServer, events;
+    let startServer;
     try {
       ({ startServer, events } = require("./server.js"));
     } catch (e) {
@@ -107,11 +112,12 @@ if (!gotLock) {
     });
 
     checkForUpdates();
-    // A re-check only at launch means someone who leaves the app open all
-    // day never sees an update land. A campaign run ending is a natural
-    // quiet moment to check again.
-    events.on("send-finished", () => checkForUpdates());
   }
+
+  // Registered once, outside createWindow — previously inside it, so a
+  // second createWindow() call (macOS activate with no windows) would stack
+  // a duplicate "send-finished" listener and double-fire every future check.
+  let updateWiredUp = false;
 
   function checkForUpdates() {
     // Requiring this lazily and guarding with a try/catch means a dev
@@ -120,11 +126,39 @@ if (!gotLock) {
     // config outside a real build.
     try {
       const { autoUpdater } = require("electron-updater");
-      autoUpdater.autoInstallOnAppQuit = true;
-      // Previously .catch(() => {}) — a failed or unverifiable update was
-      // indistinguishable from "already up to date". Logging at least
-      // surfaces it somewhere findable (console / packaged app's log).
-      autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      updateStatus.set({ currentVersion: app.getVersion() });
+
+      if (!updateWiredUp) {
+        updateWiredUp = true;
+        autoUpdater.autoInstallOnAppQuit = true;
+
+        // checkForUpdatesAndNotify() only shows an easy-to-miss OS-level
+        // notification, and only after the download finishes — nothing for
+        // "checking" or "downloading". These handlers feed update-status.js
+        // instead, which server.js exposes to the in-app banner.
+        autoUpdater.on("checking-for-update", () => updateStatus.set({ state: "checking", error: null }));
+        autoUpdater.on("update-not-available", () => updateStatus.set({ state: "up-to-date" }));
+        autoUpdater.on("update-available", (info) =>
+          updateStatus.set({ state: "available", version: info.version, percent: 0 })
+        );
+        autoUpdater.on("download-progress", (p) =>
+          updateStatus.set({ state: "downloading", percent: Math.round(p.percent) })
+        );
+        autoUpdater.on("update-downloaded", (info) =>
+          updateStatus.set({ state: "downloaded", version: info.version, percent: 100 })
+        );
+        autoUpdater.on("error", (e) => updateStatus.set({ state: "error", error: e.message || String(e) }));
+
+        // A campaign run ending is a natural quiet moment to re-check —
+        // registered once here, not per-window.
+        events.on("send-finished", () => checkForUpdates());
+        // The in-app banner's "Restart & install now" button, relayed
+        // through server.js (no direct IPC channel — see update-status.js).
+        events.on("install-update", () => autoUpdater.quitAndInstall(true, true));
+      }
+
+      autoUpdater.checkForUpdates().catch((e) => {
+        updateStatus.set({ state: "error", error: e.message || String(e) });
         console.error("Update check failed:", e.message || e);
       });
     } catch (_) {

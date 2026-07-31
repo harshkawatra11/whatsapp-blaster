@@ -12,6 +12,7 @@ const desktop = require("./wa/desktop");
 const audience = require("./wa/audience");
 const sender = require("./wa/sender");
 const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("./template");
+const updateStatus = require("./update-status");
 
 const app = express();
 
@@ -87,6 +88,23 @@ app.post("/api/settings", async (req, res) => {
 // string in the frontend, so the two can never drift apart.
 app.get("/api/template/default", (req, res) => {
   res.json({ messageTemplate: DEFAULT_TEMPLATE, nameFallback: DEFAULT_NAME_FALLBACK });
+});
+
+// --- Auto-update -----------------------------------------------------------
+// The renderer has no IPC channel to the Electron main process (no preload
+// script — the window just loads this server's own HTTP origin), so update
+// progress from main.js's electron-updater listeners is relayed through
+// update-status.js (written by main, read here) instead of a direct channel.
+// A no-op in standalone `node server.js` — state just stays "idle" forever,
+// since main.js is never in that process to write to it.
+
+app.get("/api/update-status", (req, res) => {
+  res.json(updateStatus.get());
+});
+
+app.post("/api/update-install", (req, res) => {
+  events.emit("install-update");
+  res.json({ ok: true });
 });
 
 // --- Sender number -----------------------------------------------------
