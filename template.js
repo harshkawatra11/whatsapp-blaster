@@ -47,7 +47,10 @@ function buildMessageText(row, templateText, nameFallback) {
 // back to the event-level setting), never something the operator inserts
 // as a {{chip}}. WhatsApp has no hyperlink markup (no way to hide a URL
 // behind link text like "View Brochure") — only a bare URL autolinks, so
-// the link itself has to be visible.
+// the link itself has to be visible. wa/sender.js shortens the raw Drive
+// share link via TinyURL before it ever reaches this function, so the link
+// passed in here is already the short form (falls back to the original on
+// any shortening failure) — this function just appends whatever it's given.
 //
 // The poster is NOT appended here — it's sent as a real attached image
 // (wa/sender.js + wa/desktop.js's clipboard paste), since a link produces

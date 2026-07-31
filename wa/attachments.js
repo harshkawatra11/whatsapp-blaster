@@ -14,6 +14,7 @@ const MAX_BYTES = 16 * 1024 * 1024; // WhatsApp's own attachment size limit
 const DOWNLOAD_TIMEOUT_MS = 30000;
 const EXT_BY_MIME = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp" };
 const memoryCache = new Map();
+const shortenCache = new Map();
 
 // Handles every share-link shape Drive actually produces:
 //   https://drive.google.com/file/d/<id>/view?usp=sharing
@@ -102,12 +103,45 @@ async function downloadDriveFile(url) {
   return result;
 }
 
+// Shortens a brochure link via TinyURL's key-less create endpoint — no
+// account, no auth. Never blocks a send: any failure (network, non-URL
+// response) falls back to the original link in `.url`, so a caller can
+// always just use `result.url` regardless of `.ok`.
+async function shortenUrl(url) {
+  if (shortenCache.has(url)) return shortenCache.get(url);
+
+  let result;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`, {
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      const short = (await res.text()).trim();
+      result = short.startsWith("http")
+        ? { ok: true, url: short }
+        : { ok: false, url, error: `unexpected response: ${short.slice(0, 80)}` };
+    } else {
+      result = { ok: false, url, error: `HTTP ${res.status}` };
+    }
+  } catch (e) {
+    result = { ok: false, url, error: e.name === "AbortError" ? "timed out" : e.message || String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+  shortenCache.set(url, result);
+  return result;
+}
+
 function clearMemoryCache() {
   memoryCache.clear();
+  shortenCache.clear();
 }
 
 module.exports = {
   checkLinkReachable,
   downloadDriveFile,
+  shortenUrl,
   clearMemoryCache,
 };

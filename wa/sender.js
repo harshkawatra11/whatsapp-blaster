@@ -183,8 +183,10 @@ function effectiveLink(rowLink, settingsLink) {
 // Poster is downloaded ONCE per distinct link before the send loop starts
 // (a shared event-level poster means a dead link would otherwise fail
 // identically on every recipient using it — better to find that once, up
-// front). Brochure stays a link, so it only gets the cheap reachability
-// check. Returns a Map<posterLink, downloadResult> for the loop to use.
+// front). Brochure stays a link — it gets the cheap reachability check plus
+// a one-time TinyURL shortening of the raw Drive share link, since the raw
+// link is long and ugly but still autolinks fine either way. Returns
+// { posterResults, brochureResults }, both Map<originalLink, result>.
 async function preflightAttachments(recipients, settings, onEvent) {
   attachments.clearMemoryCache();
   const posterLinks = new Set();
@@ -205,6 +207,7 @@ async function preflightAttachments(recipients, settings, onEvent) {
       onEvent({ type: "warning", message: `poster image unavailable (${link}): ${result.error}` });
     }
   }
+  const brochureResults = new Map();
   for (const link of brochureLinks) {
     const check = await attachments.checkLinkReachable(link);
     if (!check.ok) {
@@ -213,8 +216,12 @@ async function preflightAttachments(recipients, settings, onEvent) {
         message: `brochure link may be unreachable (${link}): ${check.error || `HTTP ${check.status}`} — sending will continue, the link just may not open for recipients`,
       });
     }
+    // Shortening failure isn't worth a loud warning — .url falls back to the
+    // original link either way, so the send is unaffected either way.
+    const short = await attachments.shortenUrl(link);
+    brochureResults.set(link, short.url);
   }
-  return posterResults;
+  return { posterResults, brochureResults };
 }
 
 async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborted, dryRun }) {
@@ -223,7 +230,7 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
   // them and have the very next run use the new values.
   const settings = await settingsDb.getSettings();
   let remaining = settings.dailyCap - (await campaigns.countRecentSends(senderId));
-  const posterResults = await preflightAttachments(recipients, settings, onEvent);
+  const { posterResults, brochureResults } = await preflightAttachments(recipients, settings, onEvent);
 
   try {
     await desktop.focus();
@@ -292,7 +299,7 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
       const posterLink = effectiveLink(row.posterLink, settings.posterLink);
       const brochureLink = effectiveLink(row.brochureLink, settings.brochureLink);
       let text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
-      text = appendBrochureLine(text, brochureLink);
+      text = appendBrochureLine(text, brochureLink ? brochureResults.get(brochureLink) : null);
 
       let result;
       const posterDownload = posterLink ? posterResults.get(posterLink) : null;
