@@ -43,21 +43,26 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: npm ci
 
-      - name: Build and publish
+      # --publish never: electron-builder's own GitHub publisher was tried
+      # and dropped — confirmed live, it has a race in how it finds-or-
+      # creates a release for a brand new tag, which produced TWO separate
+      # draft releases for the same version (one got the installer +
+      # latest.yml, the other got only the blockmap) with no reliable way
+      # to tell which is which afterward. `gh release create` below is a
+      # single atomic call — one release, the tag created for real,
+      # published (not draft) from the start — so there's nothing to race.
+      - name: Build (no publish)
         if: steps.check.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --publish always
+        run: npx electron-builder --publish never
 
-      # electron-builder always publishes as a DRAFT — GitHub's API refuses
-      # to create a non-draft release directly against a tag that doesn't
-      # exist yet, which a fresh version's tag never does. A draft release
-      # is invisible to electron-updater (it only looks at published
-      # releases), so it has to be un-drafted as a separate step once the
-      # tag genuinely exists.
-      - name: Publish the release (un-draft)
+      - name: Create GitHub release
         if: steps.check.outputs.exists == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "v${{ steps.version.outputs.version }}" --repo "${{ github.repository }}" --draft=false
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.version.outputs.version }}" \
+            --notes "Automated release for v${{ steps.version.outputs.version }}." \
+            dist/*.exe dist/latest.yml
