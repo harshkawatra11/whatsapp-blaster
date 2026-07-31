@@ -291,10 +291,24 @@
     <textarea id="tplText" rows="9" oninput="renderTplPreview()"></textarea>
     <div id="tplWarn" class="tpl-warn hidden"></div>
 
-    <div style="margin-top:14px; margin-bottom:14px; max-width:260px">
-      <label>If a recipient's name is blank, use</label>
-      <input type="text" id="tplFallback" placeholder="there" oninput="renderTplPreview()" />
+    <div class="row-2" style="margin-top:14px; margin-bottom:14px">
+      <div><label>If a recipient's name is blank, use</label><input type="text" id="tplFallback" placeholder="there" oninput="renderTplPreview()" /></div>
     </div>
+
+    <div class="card-label" style="margin-top:8px">01C / Poster &amp; Brochure (optional)</div>
+    <p class="note" style="margin-bottom:12px">
+      Paste Google Drive links here — must be shared as <strong>"Anyone with the link can
+      view."</strong> The poster is sent as a real image attachment, with your message as its
+      caption. The brochure is added as a plain link line under the message instead (WhatsApp
+      has no way to hide a link behind text, so the link itself is what recipients see).
+      Leave either blank to skip it. A CSV column (<code>POSTER LINK</code> /
+      <code>ATTACHMENT LINK</code>) overrides these per-row if present.
+    </p>
+    <div class="row-2" style="margin-bottom:14px">
+      <div><label>Poster image link</label><input type="text" id="tplPosterLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
+      <div><label>Brochure link</label><input type="text" id="tplBrochureLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
+    </div>
+    <div id="tplLinkWarn" class="tpl-warn hidden"></div>
 
     <div class="preview-label">Preview — as it will look to a real recipient</div>
     <div class="preview-box" id="tplPreview"></div>
@@ -315,7 +329,9 @@
     <p class="note" style="margin-bottom:16px">
       Needs a <strong>name</strong> column and a <strong>phone</strong> column
       (any of: phone, mobile, number, contact, whatsapp). Bare 10-digit numbers get +91 automatically.
-      S.No. always means the row's line number in your own file.
+      S.No. always means the row's line number in your own file. A <code>POSTER LINK</code> /
+      <code>ATTACHMENT LINK</code> column is optional and overrides the poster/brochure set
+      on Step 1 for that row only.
     </p>
     <div class="dropzone" id="dropzone">
       <input type="file" id="csvFile" accept=".csv" />
@@ -389,6 +405,7 @@
       <button class="btn btn-ghost hidden" id="startOverBtn" onclick="startOver()">⟲ Start over</button>
       <button class="btn btn-ghost hidden" id="retryBtn" onclick="retryFailed()">↻ Retry failed</button>
       <button class="btn btn-primary hidden" id="anotherBatchBtn" onclick="sendAnotherBatch()">+ Send another batch</button>
+      <button class="btn btn-ghost" id="rehearseBtn" onclick="startSend(true)" title="Runs the full pipeline against WhatsApp Desktop but never presses Enter — nothing is sent, nothing is recorded">◐ Rehearse (nothing is sent)</button>
       <button class="btn btn-success" id="sendBtn" onclick="startSend()">✆ Send Invites</button>
     </div>
   </div>
@@ -565,14 +582,36 @@ function fillTemplatePreview(text, row, fallback) {
   });
 }
 
+// Mirrors template.js's appendBrochureLine() — a fixed, non-editable
+// addition, never a {{chip}} the operator inserts themselves. WhatsApp has
+// no hyperlink markup, so the raw URL has to be visible as-is. The poster
+// is NOT appended here — it's sent as a real attached image instead (a
+// link produces no visible thumbnail — confirmed directly against a real
+// send), so the preview shows an attachment indicator for it instead.
+function appendBrochureLinePreview(text, brochureLink) {
+  if (!brochureLink) return text;
+  return text + '\n\nView Brochure: ' + brochureLink;
+}
+
+function isValidUrl(s) {
+  if (!s) return true; // empty is valid — "not configured"
+  try { new URL(s); return true; } catch { return false; }
+}
+
 function renderTplPreview() {
   const text = $('tplText').value;
   const fallback = $('tplFallback').value.trim();
+  const posterLink = $('tplPosterLink').value.trim();
+  const brochureLink = $('tplBrochureLink').value.trim();
   // Real data from the CSV once one's loaded, so the preview isn't just a
   // hypothetical — otherwise a blank name in the actual file wouldn't be
   // visible until a real send.
   const row = recipients.length ? recipients[0] : TPL_SAMPLE_ROW;
-  $('tplPreview').textContent = fillTemplatePreview(text, row, fallback) || '(empty — recipients would get nothing)';
+  const effectivePoster = (row.posterLink || posterLink || '').trim();
+  const effectiveBrochure = (row.brochureLink || brochureLink || '').trim();
+  let filled = fillTemplatePreview(text, row, fallback);
+  filled = appendBrochureLinePreview(filled, effectiveBrochure);
+  $('tplPreview').textContent = (effectivePoster ? '📎 [poster image attached]\n\n' : '') + (filled || '(empty — recipients would get nothing)');
 
   const warnings = [];
   if (!text.trim()) warnings.push('The message is empty — it will be rejected when you try to save.');
@@ -588,6 +627,17 @@ function renderTplPreview() {
     warnEl.classList.remove('hidden');
   } else {
     warnEl.classList.add('hidden');
+  }
+
+  const linkWarnings = [];
+  if (!isValidUrl(posterLink)) linkWarnings.push('Poster link doesn’t look like a valid URL.');
+  if (!isValidUrl(brochureLink)) linkWarnings.push('Brochure link doesn’t look like a valid URL.');
+  const linkWarnEl = $('tplLinkWarn');
+  if (linkWarnings.length) {
+    linkWarnEl.textContent = '⚠ ' + linkWarnings.join('  ·  ');
+    linkWarnEl.classList.remove('hidden');
+  } else {
+    linkWarnEl.classList.add('hidden');
   }
 }
 
@@ -608,6 +658,8 @@ async function loadTemplate() {
     const s = await (await fetch('/api/settings')).json();
     $('tplText').value = s.messageTemplate || '';
     $('tplFallback').value = s.nameFallback || 'there';
+    $('tplPosterLink').value = s.posterLink || '';
+    $('tplBrochureLink').value = s.brochureLink || '';
     renderTplPreview();
   } catch (e) { toast('Could not load the message template: ' + e.message, 'error'); }
 }
@@ -627,10 +679,14 @@ async function saveTemplate() {
   if (sending) return toast('A batch is still running', 'error');
   const messageTemplate = $('tplText').value;
   if (!messageTemplate.trim()) return toast('The message can’t be empty', 'error');
+  const posterLink = $('tplPosterLink').value.trim();
+  const brochureLink = $('tplBrochureLink').value.trim();
+  if (!isValidUrl(posterLink)) return toast('Poster link doesn’t look like a valid URL', 'error');
+  if (!isValidUrl(brochureLink)) return toast('Brochure link doesn’t look like a valid URL', 'error');
   try {
     const res = await fetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageTemplate, nameFallback: $('tplFallback').value.trim() || 'there' })
+      body: JSON.stringify({ messageTemplate, nameFallback: $('tplFallback').value.trim() || 'there', posterLink, brochureLink })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to save the message');
@@ -643,7 +699,7 @@ async function saveTemplate() {
 // confusing no-op edit mid-batch, matching the guards already on
 // startOver()/sendAnotherBatch().
 function setTemplateEditorDisabled(disabled) {
-  ['tplText', 'tplFallback', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
+  ['tplText', 'tplFallback', 'tplPosterLink', 'tplBrochureLink', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
 }
 
 async function confirmSenderNumber() {
@@ -774,26 +830,27 @@ function log(text, cls = 'log-info') {
   term.scrollTop = term.scrollHeight;
 }
 
-async function startSend() {
+async function startSend(dryRun) {
   if (sending) return;
   if (!selected.size) return toast('Nothing selected', 'error');
   sending = true;
   setTemplateEditorDisabled(true);
   $('sendBtn').classList.add('hidden');
+  $('rehearseBtn').classList.add('hidden');
   $('backBtn').classList.add('hidden');
   $('retryBtn').classList.add('hidden');
   $('abortBtn').classList.remove('hidden');
   $('progressWrap').classList.remove('hidden');
   $('logTerminal').innerHTML = '';
-  const counts = { submitted: 0, unknown: 0, skipped: 0 };
+  const counts = { submitted: 0, unknown: 0, skipped: 0, rehearsed: 0 };
   let done = 0;
   const total = selected.size;
-  log('Starting run — ' + total + ' recipients from ' + senderId);
+  log((dryRun ? '◐ REHEARSAL (nothing will be sent) — ' : 'Starting run — ') + total + ' recipients from ' + senderId, dryRun ? 'log-warn' : 'log-info');
 
   try {
     const res = await fetch('/api/campaigns/' + campaignId + '/send', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ snos: [...selected] })
+      body: JSON.stringify({ snos: [...selected], dryRun: !!dryRun })
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -810,6 +867,7 @@ async function startSend() {
         if (evt.type === 'aborted') { log('⛔ ' + evt.reason, 'log-fail'); continue; }
         if (evt.type === 'pause') { log('… long pause ' + Math.round(evt.ms / 1000) + 's before the next batch', 'log-warn'); continue; }
         if (evt.type === 'error') { log('Error: ' + evt.error, 'log-fail'); continue; }
+        if (evt.type === 'warning') { log('⚠ ' + evt.message, 'log-warn'); continue; }
 
         counts[evt.state] = (counts[evt.state] || 0) + 1;
         done++;
@@ -818,26 +876,32 @@ async function startSend() {
         $('cSkipped').textContent = counts.skipped;
         $('progressBar').style.width = Math.round((done / total) * 100) + '%';
 
-        const cls = evt.state === 'submitted' ? 'log-ok' : evt.state === 'skipped' ? 'log-warn' : 'log-fail';
+        const cls = evt.state === 'submitted' || evt.state === 'rehearsed' ? 'log-ok' : evt.state === 'skipped' ? 'log-warn' : 'log-fail';
         const tail = evt.error ? ' — ' + evt.error : '';
         log('S.No. ' + evt.sno + ' ' + (evt.name || '') + ' [' + (evt.phone || '') + '] → ' + evt.state + tail, cls);
       }
     }
-    log('Run finished. Submitted ' + counts.submitted + ' of ' + total + '. Verify delivery in the WhatsApp Desktop window.');
-    toast('Run finished — ' + counts.submitted + ' submitted', counts.submitted ? 'success' : 'error');
+    if (dryRun) {
+      log('Rehearsal finished. ' + counts.rehearsed + ' of ' + total + ' would have sent. Nothing was actually sent or recorded.', 'log-warn');
+      toast('Rehearsal finished — ' + counts.rehearsed + ' of ' + total + ' OK', counts.rehearsed ? 'success' : 'error');
+    } else {
+      log('Run finished. Submitted ' + counts.submitted + ' of ' + total + '. Verify delivery in the WhatsApp Desktop window.');
+      toast('Run finished — ' + counts.submitted + ' submitted', counts.submitted ? 'success' : 'error');
+    }
   } catch (e) {
     log('Stream failed: ' + e.message, 'log-fail');
-    toast('Send failed: ' + e.message, 'error');
+    toast((dryRun ? 'Rehearsal' : 'Send') + ' failed: ' + e.message, 'error');
   } finally {
     sending = false;
     setTemplateEditorDisabled(false);
     $('abortBtn').classList.add('hidden');
     $('backBtn').classList.remove('hidden');
     $('sendBtn').classList.remove('hidden');
+    $('rehearseBtn').classList.remove('hidden');
     $('retryBtn').classList.remove('hidden');
     $('startOverBtn').classList.remove('hidden');
     $('anotherBatchBtn').classList.remove('hidden');
-    await loadRecipients();
+    if (!dryRun) await loadRecipients();
   }
 }
 

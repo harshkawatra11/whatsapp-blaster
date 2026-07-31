@@ -204,6 +204,9 @@ app.delete("/api/campaigns", async (req, res, next) => {
 
 app.post("/api/campaigns/:id/send", async (req, res) => {
   const campaignId = req.params.id;
+  // Hoisted above the try block so the catch handler can also see it — a
+  // dry run's exception path must not mark the campaign "aborted" either.
+  let dryRun = false;
 
   if (sendingCampaignId) {
     return res.status(409).json({ error: `A send is already running for campaign ${sendingCampaignId}` });
@@ -221,15 +224,28 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
     if (!snos.every((n) => Number.isInteger(n))) {
       return res.status(400).json({ error: "snos must contain only integers" });
     }
+    // Strict boolean, not just truthy — a typo'd string here must not
+    // silently flip a real send into (or out of) a rehearsal.
+    if (req.body?.dryRun !== undefined && typeof req.body.dryRun !== "boolean") {
+      return res.status(400).json({ error: "dryRun must be a boolean" });
+    }
+    dryRun = req.body?.dryRun === true;
 
     const recipients = await campaigns.getRecipientsBySnos(campaignId, snos);
 
     res.set({ "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" });
     res.flushHeaders();
 
+    // A rehearsal drives the exact same keyboard/clipboard resource a real
+    // send does, so it takes the same exclusive lock — one at a time,
+    // dry run or not, never overlapping.
     sendingCampaignId = campaignId;
     activeAborts.set(campaignId, false);
-    await campaigns.setCampaignStatus(campaignId, "running");
+    // A dry run must be indistinguishable from never having run at all,
+    // apart from the log stream the operator watches live — the campaign's
+    // own persisted status is exactly the kind of real state that must not
+    // change.
+    if (!dryRun) await campaigns.setCampaignStatus(campaignId, "running");
 
     // If the browser tab closes mid-run, res.write() would otherwise just
     // silently no-op into a dead socket while the keyboard automation kept
@@ -246,15 +262,19 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
       recipients,
       onEvent: (evt) => res.write(JSON.stringify(evt) + "\n"),
       isAborted: () => activeAborts.get(campaignId) === true,
+      dryRun,
     });
 
     // Reflects the run's REAL outcome, not just the operator-abort flag —
     // previously an internal stop (focus failure, 3 consecutive failures)
     // was persisted as "done" because finalStatus only ever looked at
-    // activeAborts.
-    const operatorAborted = activeAborts.get(campaignId) === true;
-    const finalStatus = operatorAborted || result?.stoppedEarly ? "aborted" : "done";
-    await campaigns.setCampaignStatus(campaignId, finalStatus);
+    // activeAborts. Skipped entirely for a dry run — see the "running"
+    // guard above.
+    if (!dryRun) {
+      const operatorAborted = activeAborts.get(campaignId) === true;
+      const finalStatus = operatorAborted || result?.stoppedEarly ? "aborted" : "done";
+      await campaigns.setCampaignStatus(campaignId, finalStatus);
+    }
 
     runFinished = true;
     activeAborts.delete(campaignId);
@@ -266,9 +286,11 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
     try {
       res.write(JSON.stringify({ type: "error", error: e.message }) + "\n");
     } catch (_) {}
-    try {
-      await campaigns.setCampaignStatus(campaignId, "aborted");
-    } catch (_) {}
+    if (!dryRun) {
+      try {
+        await campaigns.setCampaignStatus(campaignId, "aborted");
+      } catch (_) {}
+    }
     activeAborts.delete(campaignId);
     sendingCampaignId = null;
     events.emit("send-finished");

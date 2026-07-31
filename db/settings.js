@@ -14,6 +14,14 @@ const DEFAULTS = {
   defaultCountry: "91",
   messageTemplate: DEFAULT_TEMPLATE,
   nameFallback: DEFAULT_NAME_FALLBACK,
+  // Event-level poster/brochure links — this is "the place to add it" for
+  // an event whose CSV doesn't carry a POSTER LINK / ATTACHMENT LINK
+  // column (or whose per-row link has gone stale, e.g. a deleted Drive
+  // file). Empty string means "none configured" — sending stays text-only.
+  // A CSV row's own posterLink/brochureLink, when present, overrides this
+  // per-row (wa/sender.js); this is the fallback, not an override of it.
+  posterLink: "",
+  brochureLink: "",
 };
 
 const NUMERIC_KEYS = new Set(["sendMinDelayMs", "sendMaxDelayMs", "sendBatchSize", "dailyCap"]);
@@ -77,6 +85,22 @@ async function saveSettings(partial) {
   next.messageTemplate = String(next.messageTemplate);
 
   next.nameFallback = String(next.nameFallback ?? DEFAULT_NAME_FALLBACK).trim() || DEFAULT_NAME_FALLBACK;
+
+  // Both optional (empty string is valid — "no poster/brochure configured
+  // for this event"), but if something IS provided it must at least be a
+  // well-formed URL, so a typo doesn't sit unnoticed until preflight fails
+  // every single recipient.
+  for (const key of ["posterLink", "brochureLink"]) {
+    const val = String(next[key] ?? "").trim();
+    if (val) {
+      try {
+        new URL(val);
+      } catch {
+        throw new Error(`${key === "posterLink" ? "Poster" : "Brochure"} link is not a valid URL`);
+      }
+    }
+    next[key] = val;
+  }
 
   const upsert = db.prepare(
     `INSERT INTO settings (key, value) VALUES (?, ?)

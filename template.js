@@ -6,7 +6,11 @@
 // changing this file would be unreachable for a non-technical teammate —
 // the same reason pacing settings were moved out of .env earlier.
 //
-// Text only, no poster image — see the decision log (docs/decisions.md).
+// The default is text-only — an optional poster image and brochure link
+// can be configured separately (Settings, or per-row via CSV) and are
+// attached/appended by wa/sender.js, not part of this template text. See
+// the decision log (docs/decisions.md) for why a poster image was dropped
+// and later reinstated on a different mechanism than originally planned.
 const DEFAULT_TEMPLATE = `Hi {{name}},
 
 You're invited to Rajdhani Yuva Sansad (MUN)! We're excited to have you join us as a participant.
@@ -38,4 +42,21 @@ function buildMessageText(row, templateText, nameFallback) {
   return fillTemplate(text, row, nameFallback || DEFAULT_NAME_FALLBACK);
 }
 
-module.exports = { buildMessageText, DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK };
+// The brochure is a FIXED addition, not part of the editable template
+// text — auto-appended whenever configured (per-row CSV value, falling
+// back to the event-level setting), never something the operator inserts
+// as a {{chip}}. WhatsApp has no hyperlink markup (no way to hide a URL
+// behind link text like "View Brochure") — only a bare URL autolinks, so
+// the link itself has to be visible.
+//
+// The poster is NOT appended here — it's sent as a real attached image
+// (wa/sender.js + wa/desktop.js's clipboard paste), since a link produces
+// no visible thumbnail at all (confirmed directly: the Drive /view page
+// has no og:image tag, and a bare image URL has no HTML metadata to
+// unfurl either — see docs/decisions.md).
+function appendBrochureLine(text, brochureLink) {
+  if (!brochureLink) return text;
+  return `${text}\n\nView Brochure: ${brochureLink}`;
+}
+
+module.exports = { buildMessageText, appendBrochureLine, DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK };
