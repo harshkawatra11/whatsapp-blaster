@@ -14,7 +14,7 @@ will tell you plainly rather than fail silently.
 
 ## Installing
 
-1. Download `RYS WhatsApp Blaster Setup.exe` from the link you were given.
+1. Download `WhatsApp Blaster Setup.exe` from the link you were given.
 2. Double-click it. Windows will very likely show a blue **"Windows protected your PC"**
    screen. This is expected — the installer isn't digitally signed (that costs money every
    year, and this is an internal tool, not something sold to the public), so Windows is
@@ -22,7 +22,7 @@ will tell you plainly rather than fail silently.
    - Click **More info**.
    - Click **Run anyway**.
 3. Follow the install wizard — the defaults are fine. It creates a shortcut on your Desktop
-   and in the Start Menu, so you can find it later by typing "RYS" or "WhatsApp" into the
+   and in the Start Menu, so you can find it later by typing "WhatsApp Blaster" into the
    Windows search bar.
 4. Open it. The first launch may take a few seconds longer than usual.
 
@@ -103,8 +103,8 @@ exactly as you want participants to receive it. To personalise it:
   fallback (defaults to "there" — "Hi there,") instead of literally sending "Hi {{name}},".
 - Click **Save message** when you're happy with it. It's saved immediately and used by every
   future send — including in a future app update — until you change it again.
-- **Reset to default** puts the original RYS invite text back into the box, but doesn't save
-  it automatically — you still need to click Save if you want to keep that.
+- **Reset to default** puts the original built-in invite text back into the box, but doesn't
+  save it automatically — you still need to click Save if you want to keep that.
 
 One thing worth knowing: WhatsApp's own composer rewrites certain formatting as you paste —
 most notably, a line starting with `- ` becomes a bullet `* `. The editor warns you if it

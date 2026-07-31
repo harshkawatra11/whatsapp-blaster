@@ -1,12 +1,11 @@
-# RYS WhatsApp Blaster
+# WhatsApp Blaster
 
-Bulk WhatsApp invite tool for Rajdhani Yuva Sansad (MUN) participants. Offline Windows
-desktop app — local SQLite database, no cloud, no login gate. Drives the real WhatsApp
-Desktop app directly (keyboard automation), so it needs WhatsApp Desktop already installed
-and signed in.
+Bulk WhatsApp invite tool for internal team use. Offline Windows desktop app — local SQLite
+database, no cloud, no login gate. Drives the real WhatsApp Desktop app directly (keyboard
+automation), so it needs WhatsApp Desktop already installed and signed in.
 
 **Just want to use it?** Download the latest installer from
-[Releases](https://github.com/harshkawatra11/rys-whatsapp-blaster/releases) and read the
+[Releases](https://github.com/harshkawatra11/whatsapp-blaster/releases) and read the
 [user guide](docs/README.md).
 
 ## Documentation

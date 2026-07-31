@@ -1,8 +1,7 @@
-# RYS WhatsApp Blaster — documentation
+# WhatsApp Blaster — documentation
 
-A bulk WhatsApp invite tool for Rajdhani Yuva Sansad (RYS), built for a non-technical
-operator to send a personalised message to a CSV list of participants by driving the real
-WhatsApp Desktop app.
+A bulk WhatsApp invite tool built for a non-technical operator to send a personalised
+message to a CSV list of participants by driving the real WhatsApp Desktop app.
 
 ## Start here
 

@@ -201,7 +201,7 @@ and shows a banner under the header: progress while downloading, then a "Restart
 now" button once downloaded, which calls `POST /api/update-install` → `events.emit(
 "install-update")` → `autoUpdater.quitAndInstall(true, true)` in `main.js`. The app's current
 version is also shown in the header, so it's possible to confirm an update actually landed.
-- The database path is set explicitly (`app.setName("rys-whatsapp-blaster")`, called before
+- The database path is set explicitly (`app.setName("whatsapp-blaster")`, called before
   `app.getPath('userData')` is ever read) so it can never drift if `productName` changes in
   a future edit — this is what keeps a user's saved settings and message template intact
   across updates.

@@ -76,8 +76,8 @@ still on the clipboard and read as a false pass.
 **Similarity, not exact equality.** WhatsApp's own composer applies rich-text
 autoformatting as text lands in it — most notably, `- ` at the start of a line silently
 becomes a bullet `* `. This is a real, intentional change to the composer's content, not a
-copy artifact, diagnosed by dumping a real capture: a template ending `- Team RYS` came back
-as `* Team RYS`, one character different in 221. Exact-string comparison made every real send
+copy artifact, diagnosed by dumping a real capture: a template line starting `- ` came back
+starting `* `, one character different. Exact-string comparison made every real send
 fail verification while passing single-line tests that never exercised this path. The fix:
 position-wise similarity scoring (threshold 0.95) — a same-length, mostly-matching string is
 what a legitimate paste with autoformatting looks like; empty, truncated, or unrelated
