@@ -7,12 +7,12 @@ const updateStatus = require("./update-status");
 // in a future package.json edit — app.getName() would otherwise silently
 // follow it, and the SQLite file (and the user's saved template) would
 // appear to "vanish" on that user's next launch.
-app.setName("rys-whatsapp-blaster");
+app.setName("whatsapp-blaster");
 
 // Packaged apps must write their SQLite file under the per-user AppData
 // directory, never inside the (read-only) install folder — this has to be
 // set before server.js (and therefore db/pool.js) is ever required.
-process.env.RYS_DB_PATH = path.join(app.getPath("userData"), "rys-whatsapp-blaster.sqlite3");
+process.env.WABLASTER_DB_PATH = path.join(app.getPath("userData"), "whatsapp-blaster.sqlite3");
 
 // Listen on an OS-assigned free port rather than hardcoding 3000 — a
 // teammate's machine may already have something bound to it.
@@ -56,7 +56,7 @@ if (!gotLock) {
     try {
       ({ startServer, events } = require("./server.js"));
     } catch (e) {
-      dialog.showErrorBox("RYS WhatsApp Blaster — failed to start", String(e.stack || e));
+      dialog.showErrorBox("WhatsApp Blaster — failed to start", String(e.stack || e));
       app.quit();
       return;
     }
@@ -65,7 +65,7 @@ if (!gotLock) {
     try {
       server = await startServer();
     } catch (e) {
-      dialog.showErrorBox("RYS WhatsApp Blaster — failed to start", String(e.stack || e));
+      dialog.showErrorBox("WhatsApp Blaster — failed to start", String(e.stack || e));
       app.quit();
       return;
     }
@@ -78,7 +78,7 @@ if (!gotLock) {
       height: 860,
       minWidth: 860,
       minHeight: 640,
-      title: "RYS WhatsApp Blaster",
+      title: "WhatsApp Blaster",
       icon: path.join(__dirname, "build", "icon.ico"),
       autoHideMenuBar: true,
       webPreferences: {
@@ -167,7 +167,7 @@ if (!gotLock) {
   }
 
   app.whenReady().then(createWindow).catch((e) => {
-    dialog.showErrorBox("RYS WhatsApp Blaster — failed to start", String(e && e.stack ? e.stack : e));
+    dialog.showErrorBox("WhatsApp Blaster — failed to start", String(e && e.stack ? e.stack : e));
     app.quit();
   });
 

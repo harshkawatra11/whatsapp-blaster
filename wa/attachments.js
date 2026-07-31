@@ -6,8 +6,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const DATA_DIR = process.env.RYS_DB_PATH
-  ? path.dirname(process.env.RYS_DB_PATH)
+const DATA_DIR = process.env.WABLASTER_DB_PATH
+  ? path.dirname(process.env.WABLASTER_DB_PATH)
   : path.join(__dirname, "..", "data");
 const CACHE_DIR = path.join(DATA_DIR, "campaign-assets");
 const MAX_BYTES = 16 * 1024 * 1024; // WhatsApp's own attachment size limit

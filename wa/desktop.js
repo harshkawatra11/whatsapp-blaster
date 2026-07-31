@@ -114,12 +114,12 @@ $sig = @'
 [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 '@
-Add-Type -MemberDefinition $sig -Name Win32 -Namespace RYS
+Add-Type -MemberDefinition $sig -Name Win32 -Namespace WAB
 
 function Get-ForegroundTitle {
-  $h = [RYS.Win32]::GetForegroundWindow()
+  $h = [WAB.Win32]::GetForegroundWindow()
   $sb = New-Object System.Text.StringBuilder 256
-  [RYS.Win32]::GetWindowText($h, $sb, 256) | Out-Null
+  [WAB.Win32]::GetWindowText($h, $sb, 256) | Out-Null
   return $sb.ToString()
 }
 
@@ -128,9 +128,9 @@ function Get-WhatsAppProcessIds {
 }
 
 function Test-ForegroundIsWhatsApp {
-  $fgWnd = [RYS.Win32]::GetForegroundWindow()
+  $fgWnd = [WAB.Win32]::GetForegroundWindow()
   $ownerPid = 0
-  [RYS.Win32]::GetWindowThreadProcessId($fgWnd, [ref]$ownerPid) | Out-Null
+  [WAB.Win32]::GetWindowThreadProcessId($fgWnd, [ref]$ownerPid) | Out-Null
   $waIds = @(Get-WhatsAppProcessIds)
   return ($waIds -contains $ownerPid)
 }
@@ -142,20 +142,20 @@ function Test-ForegroundIsWhatsApp {
 # Windows treat the activation as coming from an already-related process and
 # lets it through.
 function Set-ForegroundReliable([IntPtr]$hwnd) {
-  $fgWnd = [RYS.Win32]::GetForegroundWindow()
+  $fgWnd = [WAB.Win32]::GetForegroundWindow()
   $dummy = 0
-  $fgThread = [RYS.Win32]::GetWindowThreadProcessId($fgWnd, [ref]$dummy)
-  $ourThread = [RYS.Win32]::GetCurrentThreadId()
+  $fgThread = [WAB.Win32]::GetWindowThreadProcessId($fgWnd, [ref]$dummy)
+  $ourThread = [WAB.Win32]::GetCurrentThreadId()
   $attached = $false
   if ($fgThread -ne 0 -and $fgThread -ne $ourThread) {
-    $attached = [RYS.Win32]::AttachThreadInput($ourThread, $fgThread, $true)
+    $attached = [WAB.Win32]::AttachThreadInput($ourThread, $fgThread, $true)
   }
-  [RYS.Win32]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE — un-minimise first
+  [WAB.Win32]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE — un-minimise first
   Start-Sleep -Milliseconds 150
-  [RYS.Win32]::ShowWindow($hwnd, 3) | Out-Null   # SW_MAXIMIZE
-  [RYS.Win32]::BringWindowToTop($hwnd) | Out-Null
-  [RYS.Win32]::SetForegroundWindow($hwnd) | Out-Null
-  if ($attached) { [RYS.Win32]::AttachThreadInput($ourThread, $fgThread, $false) | Out-Null }
+  [WAB.Win32]::ShowWindow($hwnd, 3) | Out-Null   # SW_MAXIMIZE
+  [WAB.Win32]::BringWindowToTop($hwnd) | Out-Null
+  [WAB.Win32]::SetForegroundWindow($hwnd) | Out-Null
+  if ($attached) { [WAB.Win32]::AttachThreadInput($ourThread, $fgThread, $false) | Out-Null }
 }
 `;
 
@@ -334,8 +334,8 @@ function normaliseLineEndings(s) {
 // in it — e.g. "- " at the start of a line becomes a bullet "* ". That is a
 // REAL, intentional change to the composer's content, not a copy/paste
 // artifact, so exact equality is the wrong bar even after line-ending
-// normalisation (diagnosed by dumping a real capture: a template ending
-// "- Team RYS" came back as "* Team RYS", one character different in 221).
+// normalisation (diagnosed by dumping a real capture: a template line
+// starting "- " came back starting "* ", one character different).
 // A same-length, mostly-matching string is exactly what a legitimate paste
 // looks like; empty, truncated, or unrelated content is what a genuine
 // failure looks like. Position-wise similarity on same-length text — or
@@ -369,7 +369,7 @@ const VERIFY_SIMILARITY_THRESHOLD = 0.95;
 // actually seen turns the next verification failure into a diagnosable
 // error message instead of another silent opaque loop.
 async function verifyComposer(text) {
-  const sentinel = `RYS-VERIFY-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const sentinel = `WAB-VERIFY-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const script = `${PS_PREAMBLE}
 Set-Clipboard -Value '${psQuote(sentinel)}'
 Start-Sleep -Milliseconds 250

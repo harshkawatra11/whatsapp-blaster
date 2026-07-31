@@ -1,8 +1,8 @@
 {
-  "name": "rys-whatsapp-blaster",
-  "version": "1.1.2",
+  "name": "whatsapp-blaster",
+  "version": "1.2.0",
   "private": true,
-  "description": "Bulk WhatsApp inviter for Rajdhani Yuva Sansad participants",
+  "description": "Bulk WhatsApp invite automation, driving WhatsApp Desktop directly",
   "main": "main.js",
   "engines": {
     "node": ">=22"
@@ -24,8 +24,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "org.rys.whatsappblaster",
-    "productName": "RYS WhatsApp Blaster",
+    "appId": "org.whatsappblaster.app",
+    "productName": "WhatsApp Blaster",
     "files": [
       "main.js",
       "server.js",
@@ -57,7 +57,7 @@
     "publish": {
       "provider": "github",
       "owner": "harshkawatra11",
-      "repo": "rys-whatsapp-blaster"
+      "repo": "whatsapp-blaster"
     }
   }
 }

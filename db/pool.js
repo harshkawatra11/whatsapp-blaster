@@ -8,10 +8,10 @@ const { DatabaseSync } = require("node:sqlite");
 // compilation, which also means the packaged app has NO native modules at
 // all to go stale across an Electron upgrade.
 //
-// RYS_DB_PATH is set by the Electron main process to a path under
+// WABLASTER_DB_PATH is set by the Electron main process to a path under
 // app.getPath('userData') for the packaged app. Falls back to a local file
 // for plain `node server.js` development.
-const dbPath = process.env.RYS_DB_PATH || path.join(__dirname, "..", "data", "rys-whatsapp-blaster.sqlite3");
+const dbPath = process.env.WABLASTER_DB_PATH || path.join(__dirname, "..", "data", "whatsapp-blaster.sqlite3");
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const db = new DatabaseSync(dbPath);

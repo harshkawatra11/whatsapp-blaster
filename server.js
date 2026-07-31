@@ -362,7 +362,7 @@ if (require.main === module) {
   startServer()
     .then((server) => {
       const { port } = server.address();
-      console.log(`RYS WhatsApp Blaster listening on http://127.0.0.1:${port}`);
+      console.log(`WhatsApp Blaster listening on http://127.0.0.1:${port}`);
     })
     .catch((e) => {
       console.error("Fatal startup error:", e);

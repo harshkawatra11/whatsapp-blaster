@@ -25,7 +25,7 @@ const path = require("path");
 // System.Windows.Forms.Timer ticking on the UI thread has none of that
 // problem — no second thread, nothing to marshal back with Invoke.
 
-const STATE_FILE = path.join(os.tmpdir(), "rys-overlay-state.json");
+const STATE_FILE = path.join(os.tmpdir(), "wab-overlay-state.json");
 
 const OVERLAY_SCRIPT = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -62,7 +62,7 @@ $form.Location = New-Object System.Drawing.Point(($area.Right - $form.Width - 16
 $form.Opacity = 0.94
 
 $title = New-Object System.Windows.Forms.Label
-$title.Text = "RYS WhatsApp Blaster"
+$title.Text = "WhatsApp Blaster"
 $title.ForeColor = [System.Drawing.Color]::FromArgb(37,211,102)
 $title.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $title.AutoSize = $false
