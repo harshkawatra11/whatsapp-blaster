@@ -138,17 +138,64 @@ important thing for an operator to understand: **this is a permanent limitation 
 mechanism, not a bug to be fixed later.** WhatsApp Desktop gives this app no way to confirm
 arrival at all.
 
-## The poster image was dropped
+## The poster image: dropped, tried three ways, and finally confirmed working
 
 The original requirements plan specified "templated text as caption + poster image inline,"
 with the brochure/form as auto-previewing links in the text. This was dropped during the
 Baileys → whatsapp-web.js → Puppeteer → WhatsApp Desktop migrations, initially without an
 explicit decision to do so — attaching an image via keyboard automation would mean scripting
 the WhatsApp Desktop file picker and its preview/send dialog, a materially more fragile flow
-than pasting text, and it was deprioritised along the way. When this drift was later
-audited against the original plan, **text-only was explicitly confirmed as the actual
-requirement** and formally closed — the poster-image path is gone deliberately, not by
-accident.
+than pasting text. When this drift was later audited against the original plan, **text-only
+was explicitly confirmed as the actual requirement and formally closed** — then reopened once
+an actual event CSV (`POSTER LINK` / `ATTACHMENT LINK` columns, Google Drive share links) made
+the requirement concrete again. What follows is everything that was tried, in order, including
+a real mistake along the way — kept in because the mistake is the useful part.
+
+**Attempt 1 — link preview.** WhatsApp unfurls a plain URL with a preview card, so the poster
+was sent as a link rather than reopening the file-picker question at all. **Disproven by two
+real sends, watched arrive:** the Drive `/view` page carries no `og:image` tag at all
+(confirmed by fetching it with a WhatsApp-like user agent — only `og:title`, `og:type`,
+`og:site_name`), so the card showed only a filename and domain. Rewriting the link to
+`lh3.googleusercontent.com/d/<id>` (confirmed to return real `image/jpeg` bytes directly, no
+redirect) didn't help either — a bare image URL has no HTML for WhatsApp to read metadata
+from, so the card showed only the domain. Link preview genuinely cannot show this poster;
+verified twice, not inferred.
+
+**Attempt 2 — clipboard paste, first try — a false negative.** If WhatsApp Desktop accepts an
+image pasted from the clipboard (the way a screenshot tool does), that reuses the exact
+`SendKeys`/`Set-Clipboard` machinery already trusted for text — no file picker. Two clipboard
+formats were tried (`CF_DIB` via `Clipboard.SetImage`, `CF_HDROP` via
+`Clipboard.SetFileDropList`), tested with a sentinel placed in the composer beforehand: paste
+the image, then check whether the sentinel text is still there. Both came back "sentinel still
+there" and were declared a clean, disproven failure.
+
+**That conclusion was wrong, and working code was deleted on the strength of it.** The
+detection method was invalid: WhatsApp carries whatever text is already in the composer into
+the image preview's *caption* field when an attach succeeds — so a successful attach and a
+failed paste both leave composer text intact, and the sentinel test cannot tell them apart.
+This was caught (by the person operating the app, not by re-auditing the code) when a real
+send using the "known not to work" `CF_DIB` path was watched and produced exactly the video
+proof it wasn't supposed to be capable of. Lesson stated plainly: a detection method has to be
+validated against a *known-good* case before its "failure" result can be trusted — this one
+never was.
+
+**Attempt 3 — clipboard paste, retested with the only valid oracle: watch the chat.**
+`CF_DIB` (`Clipboard.SetImage`) confirmed working via a real send, image visibly delivered.
+`CF_HDROP` was not retested (a plausible reason it never worked: WhatsApp Desktop is a
+packaged MSIX/UWP app — confirmed installed under
+`C:\Program Files\WindowsApps\...WhatsAppDesktop` — sandboxed in an AppContainer, which can't
+open an arbitrary file path handed to it that way). A third method (WinRT `DataPackage`, the
+clipboard API a UWP surface natively consumes) was built as a fallback and never needed once
+`CF_DIB` was confirmed sufficient — removed rather than kept as unexercised code.
+
+**What ships:** the poster is a genuine attached image (`wa/desktop.js`'s
+`setClipboardImage`/`pasteImage`/`pasteCaption`, `wa/sender.js`'s attach path), with the
+message as its caption. The caption is verified with the same `verifyComposer` clipboard-
+sentinel technique the text path uses — but that only proves the *caption* landed correctly,
+not that the image itself attached; there is no valid way to check the image's presence
+without watching the chat, per the mistake above, so this is stated as a real limit rather
+than implied away. The brochure stays a link — it's a document to open, not an image to
+preview, and link delivery for it was never in question.
 
 ## Anti-ban pacing: configurable, no hard ceiling — and now genuinely reachable
 

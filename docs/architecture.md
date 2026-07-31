@@ -12,10 +12,11 @@ Express server (server.js) ── bound to 127.0.0.1 only, no auth (offline sing
   │           schema.js, pool.js, campaigns.js, sessions.js, settings.js
   │
   └── wa/  ── the automation layer
-              audience.js  — CSV parsing, phone normalisation
-              desktop.js   — PowerShell/Win32 keyboard automation of WhatsApp Desktop
-              overlay.js   — always-on-top progress window (separate PowerShell process)
-              sender.js    — orchestrates a campaign run: pacing, daily cap, retries
+              audience.js     — CSV parsing, phone normalisation
+              attachments.js  — Google Drive link normalisation + reachability checks (no download)
+              desktop.js      — PowerShell/Win32 keyboard automation of WhatsApp Desktop
+              overlay.js      — always-on-top progress window (separate PowerShell process)
+              sender.js       — orchestrates a campaign run: pacing, daily cap, retries, link preflight
 
 public/index.html — the entire frontend: one static file, no build step, no framework
 template.js — the message template default + {{placeholder}} fill logic
@@ -43,11 +44,18 @@ comparison and avoids SQLite's text-based date functions entirely.
 |---|---|
 | `wa_sessions` | Sender numbers the operator has confirmed. **Not** a WhatsApp login — WhatsApp Desktop owns its own session entirely; this table only labels which number is "active" for daily-cap tracking. |
 | `campaigns` | One row per CSV upload. `status`: `draft` → `running` → `done` / `aborted`. |
-| `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. |
-| `settings` | Plain key/value. Pacing, daily cap, default country code, and the message template + name fallback — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
+| `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. `poster_link`/`brochure_link` (nullable) carry a per-row override from an optional `POSTER LINK`/`ATTACHMENT LINK` CSV column. |
+| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the event-level `posterLink`/`brochureLink` fallback — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`, set per-connection since SQLite
 disables this by default) — deleting a campaign cascades to its recipients.
+
+`recipients.poster_link`/`brochure_link` were added after release via a **guarded migration**
+(`db/schema.js`'s `migrateAddColumnIfMissing`) rather than editing the base `CREATE TABLE`
+directly — `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so an
+in-place DDL edit would have broken every install with a live database. Checks
+`PRAGMA table_info` before `ALTER TABLE ... ADD COLUMN`; every future schema change should
+follow the same pattern.
 
 ## HTTP API
 
@@ -81,8 +89,10 @@ object per line, flushed as the run progresses:
 {"type":"aborted","reason":"3 consecutive failures — stopping"}
 ```
 
-Per-recipient events carry `state` (`submitted` | `unknown` | `skipped`); the two `type`-only
-events (`pause`, `aborted`, `error`) are progress/control signals with no recipient attached.
+Per-recipient events carry `state` (`submitted` | `unknown` | `skipped`); the `type`-only
+events (`pause`, `aborted`, `error`, `warning`) are progress/control signals with no recipient
+attached. `warning` is emitted by the poster/brochure link preflight (see below) — non-fatal,
+surfaced in the log terminal, never stops the run.
 
 ## Send-loop state machine (`wa/sender.js`)
 
@@ -90,15 +100,28 @@ events (`pause`, `aborted`, `error`) are progress/control signals with no recipi
 runCampaign()
   → settingsDb.getSettings()        (read fresh — a mid-run settings edit is deliberately
                                       NOT picked up until the next run starts)
+  → preflightAttachments()           (BEFORE focusing WhatsApp — pure network I/O)
+      → every DISTINCT poster link (per-row override, else the event-level setting) is
+        DOWNLOADED once via wa/attachments.js and cached to disk — not once per
+        recipient, since a shared event-level poster means a dead link would otherwise
+        fail identically on every recipient using it.
+      → every distinct brochure link gets a HEAD reachability check only (it stays a
+        link, never downloaded). Both warn only, never block.
   → desktop.focus()                 (throws → stoppedEarly: "focus_failed", 0 sends)
   → overlay.start()
   → for each recipient:
       skip if already 'skipped', or daily cap reached, or operator aborted
-      → sendOne(phone, text):
-          resetToCleanState → openChatByNumber → pasteIntoComposer → verifyComposer
-          (ONE retry of the same sequence on a verification failure)
-          → verified? pressEnterToSend, report 'submitted'
-          → not verified after retry? clearComposer, report 'unknown'
+      → resolve this row's effective poster/brochure link (row's own CSV value wins,
+        settings value is the fallback); append "View Brochure: <url>" to the text
+        when configured (the poster is NOT appended as text — see below)
+      → sendOne(phone, text, dryRun, posterLocalPath):
+          resetToCleanState → openChatByNumber →
+          POSTER path: setClipboardImage → pasteImage → pasteCaption(text) →
+            verifyComposer(text) (ONE retry of the whole attach sequence on failure)
+            → verified? pressEnterToSend, report 'submitted'
+          NO POSTER: pasteIntoComposer → verifyComposer (ONE retry on failure)
+            → verified? pressEnterToSend, report 'submitted'
+          → not verified after retry, either path? discard/clear, report 'unknown'
       → persist result, emit NDJSON event, update the overlay
       → 3 consecutive failures → stoppedEarly: "consecutive_failures", loop ends
       → pace: short random delay, or a longer pause every `sendBatchSize` sends
@@ -106,6 +129,17 @@ runCampaign()
   → overlay.stop(), restore the operator's original clipboard
   → return { stoppedEarly, reason }
 ```
+
+The poster is a real attached image, sent via clipboard paste (`CF_DIB` /
+`Clipboard.SetImage`) — confirmed working with a real send watched arrive on a real WhatsApp
+Desktop install, after link-preview delivery was tried first and proven impossible (the Drive
+page has no `og:image` metadata for WhatsApp to unfurl). See [decisions.md](decisions.md) for
+the full account, including an invalid test that first produced the wrong conclusion here.
+**One honest limit:** `verifyComposer` after `pasteCaption` only confirms the caption text
+landed correctly — it cannot confirm the image itself is attached, since no reliable clipboard
+readback exists for that (the same reason the earlier detection attempt was invalid). A
+caption-only failure (wrong chat, lost focus) is still caught; a silently-missing image with a
+correct caption is not.
 
 `server.js` combines `stoppedEarly` with the operator abort flag to persist the campaign's
 real final status (`done` only if it actually completed; `aborted` for every other exit,

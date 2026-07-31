@@ -111,6 +111,32 @@ most notably, a line starting with `- ` becomes a bullet `* `. The editor warns 
 spots this, since it's the one thing most likely to make a send get reported as failed even
 though the message went through fine.
 
+## Adding a poster image or brochure link
+
+Below the message box is an optional **Poster & Brochure** section. Both take a Google Drive
+link — the file must be shared as **"Anyone with the link can view"**, otherwise the app has
+no way to reach it (no Google sign-in happens anywhere in this app).
+
+- **Poster** — sent as a real image attachment, with your message as its caption. The app
+  downloads it once before a run starts (not once per recipient), then attaches the same
+  local copy to every message.
+- **Brochure** — added as a plain link line under your message: `View Brochure: <link>`.
+  WhatsApp has no way to hide a link behind other text, so the link itself is what recipients
+  see and tap. (A poster is sent as an image rather than a link because a link genuinely
+  can't show one here — Google Drive's page doesn't carry the information WhatsApp needs to
+  render a preview picture. See `docs/decisions.md` if you want the full story.)
+- Leave either blank to skip it — the app sends plain text, exactly as before.
+- If your CSV has its own `POSTER LINK` or `ATTACHMENT LINK` column, that row's own value is
+  used instead of what's set here — this section is the fallback for everyone else, and the
+  only place to put a poster/brochure at all if your CSV doesn't have those columns.
+- Before a send starts, the app fetches the poster once and checks the brochure link, telling
+  you loudly in the log if either doesn't work (a deleted file, a private share) — you don't
+  have to wait for every recipient to fail individually to find out.
+- A broken brochure link never stops a send — it's just a link line that may not open. A
+  poster that fails to download stops **that recipient** specifically (reported failed with a
+  clear reason), since sending a different message than intended would be worse than not
+  sending; a broken brochure link carries no such risk, so it's treated more leniently.
+
 ## Troubleshooting
 
 **"WhatsApp Desktop did not come to the foreground"** — WhatsApp Desktop isn't open, or
