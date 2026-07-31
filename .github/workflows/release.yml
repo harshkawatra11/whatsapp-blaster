@@ -55,6 +55,22 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: npx electron-builder --publish never
 
+      # electron-builder's own dist/latest.yml hardcodes a dash-separated
+      # asset filename (its convention for the GitHub publisher it expects
+      # to run next), but the installer it actually writes to disk keeps
+      # spaces in the name. `gh release upload` sanitizes spaces into DOTS,
+      # not dashes — confirmed live, that mismatch 404s every real update
+      # download. Renaming here to match what latest.yml already expects
+      # is simpler than patching the yml.
+      - name: Rename installer to match latest.yml's expected filename
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        run: |
+          for f in dist/*.exe; do
+            mv "$f" "dist/$(basename "$f" | tr ' ' '-')"
+          done
+          cat dist/latest.yml
+
       - name: Create GitHub release
         if: steps.check.outputs.exists == 'false'
         shell: bash
