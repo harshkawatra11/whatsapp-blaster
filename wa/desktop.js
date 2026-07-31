@@ -98,6 +98,7 @@ async function runPowerShellUnicode(script) {
 // titles.
 const PS_PREAMBLE = `
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 $sig = @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -268,6 +269,58 @@ Start-Sleep -Milliseconds 500
   await runPowerShell(script);
 }
 
+// Poster image attach via clipboard paste (CF_DIB / Clipboard.SetImage) —
+// confirmed working with a real send, watched arrive in the chat, on a
+// real WhatsApp Desktop install. Two other approaches were tried first
+// and dropped: CF_HDROP (a file path) never attached anything, plausibly
+// because WhatsApp Desktop is a packaged MSIX/UWP app sandboxed in an
+// AppContainer, which can't open an arbitrary path handed to it that way;
+// a WinRT DataPackage variant was also tried and dropped once CF_DIB was
+// confirmed sufficient. See docs/decisions.md for the full account,
+// including why an earlier "doesn't work" conclusion was itself wrong.
+async function setClipboardImage(imagePath) {
+  const quotedPath = psQuote(String(imagePath).replace(/\\/g, "\\\\"));
+  const script = `${PS_PREAMBLE}
+$img = [System.Drawing.Image]::FromFile('${quotedPath}')
+[System.Windows.Forms.Clipboard]::SetImage($img)
+$img.Dispose()
+`;
+  await runPowerShell(script);
+}
+
+// Bare Ctrl+V — deliberately no Ctrl+A/Delete first, unlike
+// pasteIntoComposer. In an ordinary text composer that's safe (it just
+// clears old text); against an image-preview state, selecting-all and
+// deleting could delete the attachment itself instead of preparing an
+// empty field.
+async function pasteImage() {
+  await ensureForeground();
+  await runPowerShell(`${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("^v")\nStart-Sleep -Milliseconds 1500`);
+}
+
+// Same non-destructive rule as pasteImage — no Ctrl+A/Delete — for typing
+// the caption under an attached image.
+async function pasteCaption(text) {
+  await ensureForeground();
+  const b64 = Buffer.from(text, "utf16le").toString("base64");
+  await runPowerShell(`${PS_PREAMBLE}
+$bytes = [Convert]::FromBase64String('${b64}')
+$msg = [System.Text.Encoding]::Unicode.GetString($bytes)
+Set-Clipboard -Value $msg
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait("^v")
+Start-Sleep -Milliseconds 500
+`);
+}
+
+// Backs out of an image-preview state without touching its contents —
+// Escape, not the destructive Ctrl+A/Delete clearComposer() uses.
+async function discardAttachment() {
+  await runPowerShell(
+    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds 200; [System.Windows.Forms.SendKeys]::SendWait("{ESC}")`
+  ).catch(() => {});
+}
+
 // Windows text controls round-trip line breaks as CRLF regardless of what
 // was pasted in. The template is authored with bare LF, so an exact string
 // compare between the pasted text and what gets copied back ALWAYS fails on
@@ -428,4 +481,8 @@ module.exports = {
   clearComposer,
   getClipboard,
   setClipboard,
+  setClipboardImage,
+  pasteImage,
+  pasteCaption,
+  discardAttachment,
 };

@@ -1,8 +1,9 @@
 const desktop = require("./desktop");
 const overlay = require("./overlay");
+const attachments = require("./attachments");
 const campaigns = require("../db/campaigns");
 const settingsDb = require("../db/settings");
-const { buildMessageText } = require("../template");
+const { buildMessageText, appendBrochureLine } = require("../template");
 
 // Sends via WhatsApp Desktop keyboard automation (wa/desktop.js), not
 // WhatsApp Web. Cold numbers — the entire audience of this campaign — were
@@ -47,11 +48,79 @@ async function abortableSleep(ms, isAborted) {
   }
 }
 
-async function sendOne(phone, text) {
+async function sendOne(phone, text, dryRun, posterPath) {
   const digits = String(phone).replace(/\D/g, "");
   try {
     await desktop.resetToCleanState();
     await desktop.openChatByNumber(digits);
+
+    if (posterPath && dryRun) {
+      // The image attach itself is NOT rehearsed. Measured directly:
+      // desktop.discardAttachment() (double Escape) does not dismiss an
+      // attached image preview — confirmed by watching a real dry run
+      // leave the image and caption sitting undiscarded in a real chat.
+      // Since there is no confirmed way to cancel out of that state
+      // without sending, rehearsing it would leave real, undismissable
+      // drafts in real chats — worse than not rehearsing it at all. A
+      // dry run with a poster configured only proves the chat opens and
+      // the caption text is well-formed (the plain text-only path,
+      // below), and says so explicitly rather than silently skipping it.
+      await desktop.pasteIntoComposer(text);
+      const v = await desktop.verifyComposer(text);
+      await desktop.clearComposer();
+      await desktop.resetToCleanState();
+      return v.ok
+        ? { outcome: "rehearsed", posterNotRehearsed: true }
+        : { outcome: "error", error: "rehearsal text verification failed (poster attach was not tested)" };
+    }
+
+    if (posterPath) {
+      // Image path: attach, then type the caption. There is no sentinel
+      // check for "did the IMAGE attach" — that oracle proved invalid
+      // (WhatsApp carries composer text into the caption field, so a
+      // successful attach and a failed paste looked identical to it).
+      // Confirmed working via a real send, watched arrive, not clipboard
+      // readback — see docs/decisions.md.
+      //
+      // verifyComposer(text) here only proves the CAPTION landed
+      // correctly — it says nothing about whether the image itself is
+      // actually attached. A caption that verifies with no image attached
+      // would still report 'submitted'. Stated honestly: this catches
+      // wrong-chat and lost-focus failures, same as the text path; it
+      // does not catch "caption fine, image silently missing" — no
+      // readable signal distinguishes that case from this codebase.
+      await desktop.setClipboardImage(posterPath);
+      await desktop.pasteImage();
+      await desktop.pasteCaption(text);
+
+      let cap = await desktop.verifyComposer(text);
+      if (!cap.ok) {
+        await desktop.discardAttachment();
+        await desktop.resetToCleanState();
+        await desktop.openChatByNumber(digits);
+        await desktop.setClipboardImage(posterPath);
+        await desktop.pasteImage();
+        await desktop.pasteCaption(text);
+        cap = await desktop.verifyComposer(text);
+      }
+
+      if (!cap.ok) {
+        await desktop.discardAttachment();
+        await desktop.resetToCleanState();
+        return {
+          outcome: "error",
+          error: `poster caption verification failed after two attempts — got: ${JSON.stringify(
+            String(cap.got).slice(0, 80)
+          )}`,
+        };
+      }
+
+      // dryRun is impossible here — handled above — so this always sends.
+      await desktop.pressEnterToSend();
+      await desktop.closeChat();
+      return { outcome: "submitted" };
+    }
+
     await desktop.pasteIntoComposer(text);
 
     let v = await desktop.verifyComposer(text);
@@ -75,6 +144,17 @@ async function sendOne(phone, text) {
       };
     }
 
+    if (dryRun) {
+      // The whole point of a rehearsal: prove the message would have gone
+      // through (the composer held exactly the right text) WITHOUT
+      // actually pressing Enter. Wipe the draft so nothing is left behind
+      // in a real chat — a dry run must be indistinguishable from never
+      // having opened that chat at all, from the recipient's side.
+      await desktop.clearComposer();
+      await desktop.resetToCleanState();
+      return { outcome: "rehearsed" };
+    }
+
     // pressEnterToSend() cannot confirm delivery — measured directly, the
     // post-send UI state isn't safely readable this way (see the comment on
     // it in wa/desktop.js). The composer content WAS verified correct
@@ -86,16 +166,64 @@ async function sendOne(phone, text) {
     await desktop.closeChat();
     return { outcome: "submitted" };
   } catch (e) {
+    await desktop.discardAttachment().catch(() => {});
+    await desktop.resetToCleanState().catch(() => {});
     return { outcome: "error", error: e.message || String(e) };
   }
 }
 
-async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborted }) {
+// Resolves the link that actually applies to a recipient: a per-row CSV
+// value (POSTER LINK / ATTACHMENT LINK columns) overrides the event-level
+// setting, which is the fallback — not the other way round. Either can be
+// absent, in which case the row gets none.
+function effectiveLink(rowLink, settingsLink) {
+  return rowLink || settingsLink || null;
+}
+
+// Poster is downloaded ONCE per distinct link before the send loop starts
+// (a shared event-level poster means a dead link would otherwise fail
+// identically on every recipient using it — better to find that once, up
+// front). Brochure stays a link, so it only gets the cheap reachability
+// check. Returns a Map<posterLink, downloadResult> for the loop to use.
+async function preflightAttachments(recipients, settings, onEvent) {
+  attachments.clearMemoryCache();
+  const posterLinks = new Set();
+  const brochureLinks = new Set();
+  for (const row of recipients) {
+    if (row.state === "skipped") continue;
+    const poster = effectiveLink(row.posterLink, settings.posterLink);
+    const brochure = effectiveLink(row.brochureLink, settings.brochureLink);
+    if (poster) posterLinks.add(poster);
+    if (brochure) brochureLinks.add(brochure);
+  }
+
+  const posterResults = new Map();
+  for (const link of posterLinks) {
+    const result = await attachments.downloadDriveFile(link);
+    posterResults.set(link, result);
+    if (!result.ok) {
+      onEvent({ type: "warning", message: `poster image unavailable (${link}): ${result.error}` });
+    }
+  }
+  for (const link of brochureLinks) {
+    const check = await attachments.checkLinkReachable(link);
+    if (!check.ok) {
+      onEvent({
+        type: "warning",
+        message: `brochure link may be unreachable (${link}): ${check.error || `HTTP ${check.status}`} — sending will continue, the link just may not open for recipients`,
+      });
+    }
+  }
+  return posterResults;
+}
+
+async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborted, dryRun }) {
   // Read fresh each run rather than once at boot — the whole point of
   // moving these into the Settings panel is that a teammate can change
   // them and have the very next run use the new values.
   const settings = await settingsDb.getSettings();
   let remaining = settings.dailyCap - (await campaigns.countRecentSends(senderId));
+  const posterResults = await preflightAttachments(recipients, settings, onEvent);
 
   try {
     await desktop.focus();
@@ -119,8 +247,11 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
   // only progress visible while that's true. It never takes focus, so it
   // can't interfere with the keystrokes it's reporting on.
   const total = recipients.filter((r) => r.state !== "skipped").length;
-  const tally = { submitted: 0, unknown: 0, skipped: 0 };
-  const overlayCounts = () => ({ ...tally, remaining: total - tally.submitted - tally.unknown - tally.skipped });
+  const tally = { submitted: 0, unknown: 0, skipped: 0, rehearsed: 0 };
+  const overlayCounts = () => ({
+    ...tally,
+    remaining: total - tally.submitted - tally.unknown - tally.skipped - tally.rehearsed,
+  });
   overlay.start();
 
   let stoppedEarly = false;
@@ -157,27 +288,56 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
 
       attempts++;
       overlay.update({ counts: overlayCounts(), current: `${row.name || "?"} (${row.phone})`, status: "sending..." });
-      const text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
-      const result = await sendOne(row.phone, text);
 
-      const state = result.outcome === "submitted" ? "submitted" : "unknown";
-      const errorText = result.outcome === "submitted" ? null : `send failed: ${result.error}`;
+      const posterLink = effectiveLink(row.posterLink, settings.posterLink);
+      const brochureLink = effectiveLink(row.brochureLink, settings.brochureLink);
+      let text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
+      text = appendBrochureLine(text, brochureLink);
+
+      let result;
+      const posterDownload = posterLink ? posterResults.get(posterLink) : null;
+      if (posterLink && !posterDownload?.ok) {
+        // Already logged loudly once at preflight — don't retry the same
+        // download per recipient, just report the consequence.
+        result = { outcome: "error", error: `poster image unavailable: ${posterDownload?.error || "download failed"}` };
+      } else {
+        result = await sendOne(row.phone, text, dryRun, posterDownload?.path);
+      }
+
+      const state =
+        result.outcome === "submitted" ? "submitted" : result.outcome === "rehearsed" ? "rehearsed" : "unknown";
+      const succeeded = state === "submitted" || state === "rehearsed";
+      // A rehearsal with a poster configured never tests the image attach
+      // itself (see sendOne) — say so on every such line, not just once,
+      // so it can't be missed reading the log after the fact.
+      const errorText = succeeded
+        ? result.posterNotRehearsed
+          ? "poster attach was not rehearsed — only the message text was checked"
+          : null
+        : `send failed: ${result.error}`;
+
+      // tally[state]++ always runs — it only drives the overlay's live
+      // progress display. What must NOT happen during a dry run is a DB
+      // write: no recipient-state change, no persisted record that
+      // anything was attempted. It must be indistinguishable from never
+      // having run at all, apart from the log line the operator sees.
       tally[state]++;
-
-      await campaigns.updateRecipientResult(campaignId, row.sno, {
-        state,
-        error: errorText,
-        sentAt: state === "submitted" ? new Date() : null,
-      });
+      if (!dryRun) {
+        await campaigns.updateRecipientResult(campaignId, row.sno, {
+          state,
+          error: errorText,
+          sentAt: state === "submitted" ? new Date() : null,
+        });
+      }
       onEvent({ ...base, state, error: errorText });
       overlay.update({
         counts: overlayCounts(),
         current: `${row.name || "?"} (${row.phone})`,
-        status: state === "submitted" ? "submitted" : errorText,
+        status: succeeded ? state : errorText,
       });
 
-      if (state === "submitted") {
-        remaining--;
+      if (succeeded) {
+        if (!dryRun) remaining--;
         consecutiveFails = 0;
       } else {
         consecutiveFails++;
