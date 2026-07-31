@@ -13,11 +13,11 @@
 // and later reinstated on a different mechanism than originally planned.
 const DEFAULT_TEMPLATE = `Hi {{name}},
 
-You're invited to Rajdhani Yuva Sansad (MUN)! We're excited to have you join us as a participant.
+You're invited to our upcoming event! We're excited to have you join us as a participant.
 
 Please keep an eye on this chat for further event details, and reply here if you have any questions.
 
-Team RYS`;
+Thanks!`;
 
 const DEFAULT_NAME_FALLBACK = "there";
 
