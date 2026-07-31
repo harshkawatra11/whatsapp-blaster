@@ -105,8 +105,9 @@ runCampaign()
         DOWNLOADED once via wa/attachments.js and cached to disk — not once per
         recipient, since a shared event-level poster means a dead link would otherwise
         fail identically on every recipient using it.
-      → every distinct brochure link gets a HEAD reachability check only (it stays a
-        link, never downloaded). Both warn only, never block.
+      → every distinct brochure link gets a HEAD reachability check (warns, never
+        blocks) plus a one-time TinyURL shortening of the raw Drive share link — a
+        shortening failure falls back silently to the original link, no warning.
   → desktop.focus()                 (throws → stoppedEarly: "focus_failed", 0 sends)
   → overlay.start()
   → for each recipient:
@@ -174,13 +175,32 @@ therefore blind keystrokes via `SendKeys`, sent through a spawned `powershell.ex
 
 - `npm run electron` — run the packaged-app code path locally via `electron .`.
 - `npm run dist` — build an unsigned Windows installer (`electron-builder`, NSIS target) into
-  `dist/`. Unsigned is a deliberate cost tradeoff — see [decisions.md](decisions.md).
+  `dist/`, without publishing. Unsigned is a deliberate cost tradeoff — see
+  [decisions.md](decisions.md).
 - `npm run release` — same build, but publishes it as a GitHub Release (`--publish always`),
   which is also what `electron-updater` checks against for auto-updates. Requires a
-  `GH_TOKEN` with repo access in the environment.
-- Releasing an update: bump `version` in `package.json`, commit, `npm run release`. Every
-  installed copy checks for updates on launch and after each campaign run ends, downloads
-  silently, and installs on the next quit — no prompts, nothing for the operator to do.
+  `GH_TOKEN` with repo access in the environment — this is the manual path; normally CI does
+  this instead (below).
+
+**Releasing is automatic on a version bump.** `.github/workflows/release.yml` runs on every
+push to `main` (repo is public, so Actions minutes are free). It reads `version` from
+`package.json` and checks whether a GitHub Release for `v<version>` already exists — if so,
+it exits doing nothing, which is what makes an ordinary commit (docs, a fix) ship nothing. If
+the version is new, it builds and publishes via `electron-builder --publish always`, using the
+repo's own built-in `GITHUB_TOKEN` (no secret to configure). **To ship an update: bump
+`version` in `package.json`, commit, push.** Nothing else.
+
+Every installed copy checks for updates on launch and after each campaign run ends
+(`main.js`'s `checkForUpdates`), downloads in the background, and installs on the next quit
+even if the user never touches it. Unlike the original design, this is no longer silent:
+`update-status.js` is written by `main.js`'s `autoUpdater` event handlers
+(`checking-for-update`, `update-available`, `download-progress`, `update-downloaded`, `error`)
+and read by `GET /api/update-status` (`server.js`) — the renderer polls this (every 30s idle,
+every 1s while downloading/checking, since there's no IPC/preload channel to push it directly)
+and shows a banner under the header: progress while downloading, then a "Restart & install
+now" button once downloaded, which calls `POST /api/update-install` → `events.emit(
+"install-update")` → `autoUpdater.quitAndInstall(true, true)` in `main.js`. The app's current
+version is also shown in the header, so it's possible to confirm an update actually landed.
 - The database path is set explicitly (`app.setName("rys-whatsapp-blaster")`, called before
   `app.getPath('userData')` is ever read) so it can never drift if `productName` changes in
   a future edit — this is what keeps a user's saved settings and message template intact

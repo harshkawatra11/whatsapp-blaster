@@ -24,9 +24,14 @@ Full docs live in [`docs/`](docs/README.md):
 npm install
 npm start          # plain Node, http://127.0.0.1:3000
 npm run electron    # run through the Electron shell
-npm run dist         # build an unsigned Windows installer into dist/
-npm run release      # build and publish a GitHub Release (needs GH_TOKEN)
+npm run dist         # build an unsigned Windows installer into dist/, no publish
+npm run release      # manual publish path — build and publish a GitHub Release (needs GH_TOKEN)
 ```
 
 Requires Node ≥ 22 (for the built-in `node:sqlite` module) and, for actually sending, a
 Windows machine with WhatsApp Desktop installed and signed in.
+
+**Shipping an update:** normally you don't run `npm run release` yourself — bump `version` in
+`package.json`, commit, and push to `main`. GitHub Actions (`.github/workflows/release.yml`)
+builds and publishes automatically; every installed copy shows an in-app update banner and
+installs on its next close. A push with no version bump ships nothing.

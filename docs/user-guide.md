@@ -122,7 +122,12 @@ no way to reach it (no Google sign-in happens anywhere in this app).
   local copy to every message.
 - **Brochure** — added as a plain link line under your message: `View Brochure: <link>`.
   WhatsApp has no way to hide a link behind other text, so the link itself is what recipients
-  see and tap. (A poster is sent as an image rather than a link because a link genuinely
+  see and tap — but it's tappable either way, since WhatsApp auto-detects any bare
+  `https://` link as a blue, tappable link on its own. The app shortens the raw Google Drive
+  link via TinyURL before sending (once per distinct link, not per recipient) so what shows
+  up is short and clean instead of a long Drive URL; if shortening fails for any reason it
+  quietly falls back to the original link, so a send is never blocked by it.
+  (A poster is sent as an image rather than a link because a link genuinely
   can't show one here — Google Drive's page doesn't carry the information WhatsApp needs to
   render a preview picture. See `docs/decisions.md` if you want the full story.)
 - Leave either blank to skip it — the app sends plain text, exactly as before.
