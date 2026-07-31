@@ -57,7 +57,8 @@
     "publish": {
       "provider": "github",
       "owner": "harshkawatra11",
-      "repo": "rys-whatsapp-blaster"
+      "repo": "rys-whatsapp-blaster",
+      "releaseType": "release"
     }
   }
 }
