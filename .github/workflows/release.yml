@@ -13,23 +13,20 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Read version
         id: version
-        shell: bash
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Check if this version is already released
         id: check
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -39,8 +36,18 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+  build-windows:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Install dependencies
-        if: steps.check.outputs.exists == 'false'
         run: npm ci
 
       # --publish never: electron-builder's own GitHub publisher was tried
@@ -48,11 +55,10 @@ jobs:
       # creates a release for a brand new tag, which produced TWO separate
       # draft releases for the same version (one got the installer +
       # latest.yml, the other got only the blockmap) with no reliable way
-      # to tell which is which afterward. `gh release create` below is a
-      # single atomic call — one release, the tag created for real,
-      # published (not draft) from the start — so there's nothing to race.
+      # to tell which is which afterward. The `release` job below does a
+      # single atomic `gh release create` instead, so there's nothing to
+      # race.
       - name: Build (no publish)
-        if: steps.check.outputs.exists == 'false'
         run: npx electron-builder --publish never
 
       # electron-builder's own dist/latest.yml hardcodes a dash-separated
@@ -63,7 +69,6 @@ jobs:
       # download. Renaming here to match what latest.yml already expects
       # is simpler than patching the yml.
       - name: Rename installer to match latest.yml's expected filename
-        if: steps.check.outputs.exists == 'false'
         shell: bash
         run: |
           for f in dist/*.exe; do
@@ -71,14 +76,74 @@ jobs:
           done
           cat dist/latest.yml
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            dist/*.exe
+            dist/latest.yml
+          if-no-files-found: error
+
+  build-macos:
+    needs: check
+    if: needs.check.outputs.exists == 'false'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No --mac flag needed — package.json's build.mac already declares
+      # both arm64 and x64 for dmg + zip. Deliberately never publishes
+      # latest-mac.yml: this app is unsigned (no paid Apple Developer ID),
+      # so electron-updater's macOS mechanism (Squirrel.Mac) cannot work at
+      # all — shipping an update feed that's guaranteed to fail would be
+      # worse than shipping none. macOS gets a manual "download the new
+      # version" banner instead (see main.js's checkForUpdatesMac).
+      - name: Build (no publish)
+        run: npx electron-builder --publish never
+
+      - name: Rename installers to match Windows' dash convention
+        run: |
+          for f in dist/*.dmg dist/*.zip; do
+            [ -e "$f" ] || continue
+            mv "$f" "dist/$(basename "$f" | tr ' ' '-')"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [check, build-windows, build-macos]
+    if: needs.check.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-build
+          path: dist
+
       - name: Create GitHub release
-        if: steps.check.outputs.exists == 'false'
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
+          gh release create "v${{ needs.check.outputs.version }}" \
             --repo "${{ github.repository }}" \
-            --title "${{ steps.version.outputs.version }}" \
-            --notes "Automated release for v${{ steps.version.outputs.version }}." \
-            dist/*.exe dist/latest.yml
+            --title "${{ needs.check.outputs.version }}" \
+            --notes "Automated release for v${{ needs.check.outputs.version }}. macOS build is UNVERIFIED — see docs/decisions.md." \
+            dist/*.exe dist/latest.yml dist/*.dmg dist/*.zip
