@@ -7,8 +7,19 @@ const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("../template");
 // Deliberately no hard ceiling on any of these, per the original product
 // requirement ("sensible defaults shown in the UI, every limit editable").
 const DEFAULTS = {
-  sendMinDelayMs: 8000,
-  sendMaxDelayMs: 20000,
+  // Changed from 8000/20000 at explicit operator request: the automation
+  // steps themselves (open chat ~3s, paste+verify ~3s, send ~2s — see
+  // wa/desktop.win.js's TIMINGS-equivalent Start-Sleep calls) already take
+  // about 8s per recipient, and that WAS the dominant cost; the randomised
+  // 8-20s gap this replaces was stacked ON TOP of that, which is what made
+  // ~4-5 recipients take ~2 minutes. Zero here means "move to the next
+  // recipient the instant this one's automation finishes" — no added idle
+  // wait. This removes the app's main defence against looking automated
+  // (see docs/operations.md) — raising it back is just a Settings-panel
+  // edit, no code change, if send-safety turns out to matter more than
+  // speed for a given number.
+  sendMinDelayMs: 0,
+  sendMaxDelayMs: 0,
   sendBatchSize: 50,
   dailyCap: 200,
   defaultCountry: "91",
