@@ -13,6 +13,7 @@ const audience = require("./wa/audience");
 const sender = require("./wa/sender");
 const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("./template");
 const updateStatus = require("./update-status");
+const platformStatus = require("./platform-status");
 
 const app = express();
 
@@ -104,6 +105,32 @@ app.get("/api/update-status", (req, res) => {
 
 app.post("/api/update-install", (req, res) => {
   events.emit("install-update");
+  res.json({ ok: true });
+});
+
+// macOS has no auto-update (Squirrel.Mac requires a paid Apple Developer ID
+// signature — see docs/decisions.md); update-status.js's "manual-available"
+// state instead offers a link to the release page, opened via main.js's
+// existing shell.openExternal + isSafeExternalUrl discipline rather than a
+// raw window.open from the renderer.
+app.post("/api/update-open", (req, res) => {
+  events.emit("open-release-page");
+  res.json({ ok: true });
+});
+
+// --- Platform status -------------------------------------------------------
+// macOS-only concern: WhatsApp Blaster cannot send a single message on a Mac
+// until the user grants Accessibility permission (System Events keystroke
+// commands are gated on it). main.js polls systemPreferences and writes the
+// result here; on Windows this just reports accessibilityTrusted: null and
+// the frontend never shows the card.
+
+app.get("/api/platform-status", (req, res) => {
+  res.json(platformStatus.get());
+});
+
+app.post("/api/request-accessibility", (req, res) => {
+  events.emit("request-accessibility");
   res.json({ ok: true });
 });
 

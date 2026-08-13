@@ -1,6 +1,7 @@
 const path = require("path");
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, systemPreferences } = require("electron");
 const updateStatus = require("./update-status");
+const platformStatus = require("./platform-status");
 
 // Pinned explicitly, before app.getPath('userData') is ever read, so the
 // database path can never drift if the display name (productName) changes
@@ -79,7 +80,7 @@ if (!gotLock) {
       minWidth: 860,
       minHeight: 640,
       title: "WhatsApp Blaster",
-      icon: path.join(__dirname, "build", "icon.ico"),
+      icon: path.join(__dirname, "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
       autoHideMenuBar: true,
       webPreferences: {
         contextIsolation: true,
@@ -111,15 +112,123 @@ if (!gotLock) {
       mainWindow = null;
     });
 
+    wireCoreListeners();
     checkForUpdates();
+    if (process.platform === "darwin") startAccessibilityPolling();
   }
 
   // Registered once, outside createWindow — previously inside it, so a
   // second createWindow() call (macOS activate with no windows) would stack
-  // a duplicate "send-finished" listener and double-fire every future check.
+  // duplicate listeners and double-fire every future check/prompt.
+  let coreListenersWired = false;
+  function wireCoreListeners() {
+    if (coreListenersWired) return;
+    coreListenersWired = true;
+
+    // A campaign run ending is a natural quiet moment to re-check for
+    // updates — applies to both the Windows (electron-updater) and macOS
+    // (manual GitHub check) paths, so it lives here rather than inside
+    // either platform branch.
+    events.on("send-finished", () => checkForUpdates());
+
+    // The macOS banner's "Download" button (manual-available state) — no
+    // download/install to do, just open the release page in the OS
+    // browser, through the same isSafeExternalUrl-guarded path as any
+    // other external link this app opens.
+    events.on("open-release-page", () => {
+      const { url } = updateStatus.get();
+      if (url && isSafeExternalUrl(url)) shell.openExternal(url);
+    });
+
+    // The macOS Accessibility-permission card's "Grant access" button.
+    // isTrustedAccessibilityClient(true) shows the OS prompt if it hasn't
+    // been shown before; either way, also deep-link to the right System
+    // Settings pane, since a user who already dismissed the prompt once
+    // won't see it again and needs a manual route back to it.
+    events.on("request-accessibility", () => {
+      if (process.platform !== "darwin") return;
+      systemPreferences.isTrustedAccessibilityClient(true);
+      shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+    });
+  }
+
+  // Polled, not event-driven — Electron has no change notification for TCC
+  // grants, and this app cannot send a single message on macOS without this
+  // permission, so it's worth checking periodically rather than only at
+  // launch (a user can grant it, or macOS can revoke it on an update,
+  // mid-session). Stops once trusted; a later revoke would only be caught
+  // on the next launch, which matches the "check periodically, not
+  // continuously forever" spirit without an unbounded interval running.
+  function startAccessibilityPolling() {
+    const check = () => {
+      const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+      platformStatus.set({ accessibilityTrusted: trusted });
+      return trusted;
+    };
+    if (check()) return;
+    const timer = setInterval(() => {
+      if (check()) clearInterval(timer);
+    }, 5000);
+  }
+
   let updateWiredUp = false;
 
+  // Compares two "x.y.z" strings. Only used for the macOS manual-update
+  // check (Windows delegates entirely to electron-updater, which does its
+  // own comparison) — a tiny local implementation avoids adding a semver
+  // dependency for one comparison.
+  function isNewerVersion(a, b) {
+    const pa = String(a).split(".").map(Number);
+    const pb = String(b).split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const na = pa[i] || 0;
+      const nb = pb[i] || 0;
+      if (na !== nb) return na > nb;
+    }
+    return false;
+  }
+
+  // macOS cannot auto-update for free: Squirrel.Mac (electron-updater's
+  // macOS mechanism) hard-requires a valid Developer ID signature, and this
+  // app is unsigned (no paid Apple account). Rather than silently doing
+  // nothing, this checks the GitHub Releases API directly and — if a newer
+  // tag exists — offers a "Download" link to the release page. No
+  // latest-mac.yml is ever published (see .github/workflows/release.yml),
+  // so there's nothing here for electron-updater to even attempt.
+  async function checkForUpdatesMac() {
+    updateStatus.set({ currentVersion: app.getVersion() });
+    try {
+      const pkg = require("./package.json");
+      const { owner, repo } = pkg.build.publish;
+      updateStatus.set({ state: "checking", error: null });
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, {
+        headers: { Accept: "application/vnd.github+json", "User-Agent": "whatsapp-blaster" },
+      });
+      if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+      const data = await res.json();
+      const latest = String(data.tag_name || "").replace(/^v/, "");
+      if (latest && isNewerVersion(latest, app.getVersion())) {
+        updateStatus.set({
+          state: "manual-available",
+          version: latest,
+          url: data.html_url || `https://github.com/${owner}/${repo}/releases`,
+        });
+      } else {
+        updateStatus.set({ state: "up-to-date" });
+      }
+    } catch (e) {
+      // Never blocks the app — a failed check (offline, rate-limited) just
+      // leaves the banner absent until the next check.
+      updateStatus.set({ state: "error", error: e.message || String(e) });
+    }
+  }
+
   function checkForUpdates() {
+    if (process.platform === "darwin") {
+      checkForUpdatesMac();
+      return;
+    }
+
     // Requiring this lazily and guarding with a try/catch means a dev
     // checkout without a packaged build (no update feed configured) never
     // crashes the app — electron-updater throws when it can't find feed
@@ -149,11 +258,10 @@ if (!gotLock) {
         );
         autoUpdater.on("error", (e) => updateStatus.set({ state: "error", error: e.message || String(e) }));
 
-        // A campaign run ending is a natural quiet moment to re-check —
-        // registered once here, not per-window.
-        events.on("send-finished", () => checkForUpdates());
         // The in-app banner's "Restart & install now" button, relayed
         // through server.js (no direct IPC channel — see update-status.js).
+        // "send-finished" re-checks are wired once for both platforms in
+        // wireCoreListeners(), not here.
         events.on("install-update", () => autoUpdater.quitAndInstall(true, true));
       }
 

@@ -251,6 +251,14 @@
   #updateBanner .btn { padding: 4px 14px; font-size: 0.72rem; }
   #appVersion { color: var(--muted); font-size: 0.62rem; margin-left: auto; }
 
+  #accessibilityBanner {
+    display: flex; align-items: center; gap: 14px; padding: 10px 24px;
+    background: rgba(255,159,10,0.1); border-bottom: 1px solid var(--border2);
+    font-size: 0.75rem; font-family: var(--mono);
+  }
+  #accessibilityBanner.hidden { display: none; }
+  #accessibilityBanner .btn { padding: 4px 14px; font-size: 0.72rem; margin-left: auto; }
+
   .note { font-size: 0.72rem; color: var(--muted); line-height: 1.65; }
   .note strong { color: var(--accent3); }
   .hidden { display: none !important; }
@@ -271,6 +279,15 @@
   <span id="updateBannerText"></span>
   <div class="progress-outer hidden" id="updateBannerProgressWrap"><div class="progress-inner" id="updateBannerProgress" style="width:0%"></div></div>
   <button class="btn btn-primary hidden" id="updateBannerBtn" onclick="installUpdate()">Restart &amp; install now</button>
+</div>
+
+<!-- macOS only: WhatsApp Blaster cannot send a single message here until
+     Accessibility permission is granted (System Events keystroke commands
+     are gated on it). Shown/hidden by pollPlatformStatus() in the script
+     below; there is no Windows equivalent of this requirement. -->
+<div id="accessibilityBanner" class="hidden">
+  <span>WhatsApp Blaster needs <strong>Accessibility</strong> permission to control WhatsApp on this Mac.</span>
+  <button class="btn btn-primary" onclick="requestAccessibility()">Grant access</button>
 </div>
 
 <main>
@@ -1045,6 +1062,17 @@ async function pollUpdateStatus() {
     progressWrap.classList.add('hidden');
     btn.classList.remove('hidden');
     if (updateLastState !== 'downloaded') toast('Update v' + s.version + ' ready — restart to install', 'success');
+  } else if (s.state === 'manual-available') {
+    // macOS has no auto-update (no paid Apple signing cert — see
+    // docs/decisions.md); this just links to the release page instead of
+    // downloading/installing in place.
+    banner.classList.remove('hidden');
+    text.textContent = 'Update v' + s.version + ' available.';
+    progressWrap.classList.add('hidden');
+    btn.classList.remove('hidden');
+    btn.textContent = 'Download';
+    btn.onclick = openReleasePage;
+    if (updateLastState !== 'manual-available') toast('Update v' + s.version + ' available for download', 'info');
   }
   updateLastState = s.state;
 
@@ -1063,9 +1091,48 @@ async function installUpdate() {
   }
 }
 
+async function openReleasePage() {
+  try {
+    await fetch('/api/update-open', { method: 'POST' });
+  } catch (e) {
+    toast('Could not open the release page: ' + e.message, 'error');
+  }
+}
+
+// ── macOS Accessibility permission ──────────────────────────────────────
+// Same polling bridge as update status (no IPC channel to main). On
+// Windows, platform-status.js always reports accessibilityTrusted: null,
+// so this card just never appears there.
+async function pollPlatformStatus() {
+  let s;
+  try {
+    s = await (await fetch('/api/platform-status')).json();
+  } catch (e) {
+    setTimeout(pollPlatformStatus, 10000);
+    return;
+  }
+  const banner = $('accessibilityBanner');
+  if (s.platform === 'darwin' && s.accessibilityTrusted === false) {
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+  setTimeout(pollPlatformStatus, 10000);
+}
+
+async function requestAccessibility() {
+  try {
+    await fetch('/api/request-accessibility', { method: 'POST' });
+    toast('Check System Settings → Privacy & Security → Accessibility', 'info');
+  } catch (e) {
+    toast('Could not open settings: ' + e.message, 'error');
+  }
+}
+
 loadNumbers();
 loadTemplate();
 pollUpdateStatus();
+pollPlatformStatus();
 </script>
 </body>
 </html>
