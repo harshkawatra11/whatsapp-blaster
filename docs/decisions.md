@@ -213,6 +213,14 @@ here rather than silently changed: blocking is the safer default for protecting 
 number, and since it's fully editable in the UI, an operator who wants to send more on a
 given day can simply raise it.
 
+**The default inter-recipient delay was reduced to 0/0ms (from 8000/20000ms) at explicit
+operator request.** The observed "~2 minutes for 4-5 people" was mostly this randomised gap
+stacked on top of the automation's own ~8s-per-recipient cycle (open chat, paste, verify,
+send), not the automation itself. Flagged plainly rather than just changed: this removes the
+app's main defence against a bot-like sending pattern (see [operations.md](operations.md)),
+in favour of speed. It's a Settings-panel value, not a code constant, so it can be raised
+back per-sender without a rebuild if a number gets flagged.
+
 ## No login/auth gate; bound to 127.0.0.1 only
 
 An `APP_PASSWORD` auth gate existed early on, built for a scenario where the app might be
@@ -228,7 +236,54 @@ reachable from the local network, let alone the internet.
 Code-signing certificates cost real, recurring money for a small internal tool. The chosen
 tradeoff: ship unsigned, and document the one-time "Windows protected your PC → More info →
 Run anyway" click an operator needs to make on first install (see
-[user-guide.md](user-guide.md)) rather than pay an ongoing cost to suppress that prompt.
+[user-guide.md](user-guide.md)) rather than pay an ongoing cost to suppress that prompt. The
+macOS build is unsigned for the same cost reason — see the macOS port section above for what
+that costs there specifically (no auto-update, plus a stricter Gatekeeper flow than Windows'
+SmartScreen prompt).
+
+## The macOS port: osascript over a native module, no auto-update, shipped unverified
+
+Three decisions made together, all forced by the same constraint stated upfront by the
+operator: **no subscriptions or money to be introduced.**
+
+**`osascript` + System Events, not a native automation module (robotjs/nut.js).** Mirrors the
+exact reasoning behind the Windows backend's PowerShell/Win32 choice and behind picking
+`node:sqlite` over a native SQLite driver: spawn a helper that ships with the OS, add zero
+native dependency, avoid the single most common cause of Electron packaging failure. There
+was never a real alternative under this constraint — a native module would need prebuilt
+binaries per macOS architecture and a compile toolchain fallback, for no capability gain over
+what `osascript` already does.
+
+**No macOS auto-update — verified as flatly impossible for free, not merely inconvenient.**
+`electron-updater`'s macOS mechanism (Squirrel.Mac) hard-requires a valid Developer ID code
+signature; an ad-hoc or unsigned build cannot use it at all, full stop. The only way around
+that is a paid Apple Developer Program membership ($99/yr), which was explicitly ruled out.
+So macOS gets a **notify-only** banner instead: `main.js` polls the GitHub Releases API
+directly and offers a "Download" link to the new `.dmg`, and CI deliberately never publishes
+`latest-mac.yml` — shipping an update feed that's guaranteed to fail silently would be worse
+than shipping none. Windows auto-update is completely unaffected; this divergence is
+platform-inherent, not a shortcut.
+
+A second, related wall hit during research: even *distributing* a signed-enough app to launch
+at all needs *some* signature on Apple Silicon (`identity: null` alone still gets "app is
+damaged" on M-series Macs) — solved for free with an ad-hoc `codesign --sign -` in
+`build/afterPack.js`, which is enough to launch but never enough to satisfy Squirrel.Mac, TCC
+permission persistence across updates, or Gatekeeper's post-Sequoia removal of the
+right-click → Open bypass (users now go through System Settings → Privacy & Security → Open
+Anyway instead — see [user-guide.md](user-guide.md)).
+
+**Shipped unverified, deliberately, with a doctor script rather than a rewrite risk.** The
+macOS backend (`wa/desktop.mac.js`) was written entirely on a Windows machine — every
+keystroke mapping is based on published WhatsApp for Mac shortcuts (Cmd+N for New Chat, etc.,
+confirmed to exist), but no timing constant or clipboard-image behavior has been run against
+real WhatsApp. This mirrors exactly how the Windows backend was actually built — every
+hard-won detail there (the 2500ms settle after typing digits, the sentinel oracle, the
+CF_DIB discovery, the AttachThreadInput fix) came from watching real behaviour, not from
+reading documentation. Waiting for Mac access before writing a line of the port would have
+meant starting from zero once that access existed; instead, `scripts/mac-doctor.js` gives
+that eventual session a structured, step-by-step verification pass with the current
+`TIMINGS` printed for reference, turning "verify from scratch" into "tune what's already
+there." The v1.3.0 release notes and this file both say plainly: **macOS is unverified.**
 
 ## Local SQLite database survives updates and "Start over"
 

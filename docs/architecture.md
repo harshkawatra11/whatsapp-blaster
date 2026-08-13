@@ -14,18 +14,34 @@ Express server (server.js) ── bound to 127.0.0.1 only, no auth (offline sing
   └── wa/  ── the automation layer
               audience.js     — CSV parsing, phone normalisation
               attachments.js  — Google Drive link normalisation + reachability checks (no download)
-              desktop.js      — PowerShell/Win32 keyboard automation of WhatsApp Desktop
-              overlay.js      — always-on-top progress window (separate PowerShell process)
+              desktop.js      — platform dispatcher (process.platform → win/mac backend)
+              desktop.win.js  — PowerShell/Win32 keyboard automation of WhatsApp Desktop (Windows)
+              desktop.mac.js  — osascript/System Events keyboard automation (macOS, UNVERIFIED)
+              verify.js       — the composer-verification similarity oracle, shared by both backends
+              overlay.js      — always-on-top progress window (Electron BrowserWindow, cross-platform)
               sender.js       — orchestrates a campaign run: pacing, daily cap, retries, link preflight
+                                 (platform-agnostic — talks only to wa/desktop.js's dispatcher)
 
 public/index.html — the entire frontend: one static file, no build step, no framework
+public/overlay.html — content for the always-on-top progress window
 template.js — the message template default + {{placeholder}} fill logic
+update-status.js — Windows auto-update / macOS manual-update state, bridged to the renderer
+platform-status.js — macOS Accessibility-permission state, bridged to the renderer
 ```
 
 **Why no browser automation (Puppeteer/whatsapp-web.js/Baileys)?** See
-[decisions.md](decisions.md) — in short, this app drives the real WhatsApp Desktop Windows
-app via keyboard automation, not a browser session, because the CSV contacts only resolve
-correctly through a real Desktop app instance.
+[decisions.md](decisions.md) — in short, this app drives the real WhatsApp desktop app via
+keyboard automation, not a browser session, because the CSV contacts only resolve correctly
+through a real desktop app instance.
+
+**Two platform backends behind one contract.** `wa/sender.js` and `server.js` call
+`wa/desktop.js`'s 15-function contract (`focus`, `openChatByNumber`, `pasteIntoComposer`,
+`verifyComposer`, …) without knowing which OS is running — the dispatcher in `desktop.js`
+`require()`s `desktop.win.js` or `desktop.mac.js` based on `process.platform`, and neither
+backend is even parsed on the other OS. `wa/sender.js` itself has **zero** platform-specific
+code, which is what made this split possible without touching the orchestration logic at
+all. See [decisions.md](decisions.md) for why the macOS backend uses `osascript` rather than
+a native automation module, and why it ships labeled unverified.
 
 **Why Electron wraps a plain Express server rather than using Electron's own IPC?** The
 server also runs standalone via `node server.js` for local development — `npm run electron`
@@ -146,7 +162,7 @@ correct caption is not.
 real final status (`done` only if it actually completed; `aborted` for every other exit,
 including an internal stop that isn't operator-triggered).
 
-## Why keyboard automation, and how `wa/desktop.js` actually works
+## Why keyboard automation, and how the desktop backends work
 
 WhatsApp Desktop publishes **nothing** to Windows UI Automation — a maximised, focused
 window has exactly 8 descendant elements (title-bar chrome only), verified directly. There
@@ -160,7 +176,8 @@ therefore blind keystrokes via `SendKeys`, sent through a spawned `powershell.ex
   one-time sentinel, select-all + copy from whatever holds focus, and compare what comes
   back against the source text (position-wise similarity, not exact equality — WhatsApp's
   own rich-text autoformatting, e.g. `- ` → `* `, means exact equality is the wrong bar even
-  after line-ending normalisation).
+  after line-ending normalisation). This oracle (`wa/verify.js`) is shared, unchanged, by
+  both platform backends.
 - **Delivery is never verified** — only that a real composer accepted the paste. Every send
   reports `submitted`, never `sent`/`delivered`. See [decisions.md](decisions.md) for why
   post-send verification was tried and abandoned.
@@ -171,37 +188,91 @@ therefore blind keystrokes via `SendKeys`, sent through a spawned `powershell.ex
   process blocked on a contended clipboard (common with Office, RDP, or clipboard managers
   running) would otherwise hang the promise, and the whole send loop, forever.
 
+### macOS backend (`wa/desktop.mac.js`) — UNVERIFIED
+
+Mirrors the Windows design exactly, one level down: `osascript` (System Events) replaces
+PowerShell/Win32, and `pbcopy`/`pbpaste` replace `Set-Clipboard`/`Get-Clipboard`. Because
+macOS pipes are UTF-8, the base64(UTF-16LE) smuggling above has **no macOS equivalent** —
+text goes through `pbcopy`/`pbpaste` directly. Foreground identity is asserted by **bundle
+identifier**, the same anti-spoofing principle as the Windows PID check. `focus()` is
+simpler than Windows: macOS has no foreground-lock/UAC problem, so there is no
+`AttachThreadInput` equivalent — a plain `activate` plus a verify-and-retry loop is enough.
+
+This file was written on a Windows machine with no Mac available to test against — every
+keystroke mapping (Cmd+N for New Chat, etc.) is based on published WhatsApp for Mac
+shortcuts, and every `TIMINGS` delay is a starting guess seeded from the tuned Windows
+values, not a measurement. `npm run mac:doctor` (`scripts/mac-doctor.js`) is the intended
+first thing to run on a real Mac: it walks each primitive against a real chat, step by step,
+so the eventual tuning pass is short. See [decisions.md](decisions.md) for the reasoning
+behind shipping it this way rather than waiting.
+
 ## Build & release
 
 - `npm run electron` — run the packaged-app code path locally via `electron .`.
-- `npm run dist` — build an unsigned Windows installer (`electron-builder`, NSIS target) into
-  `dist/`, without publishing. Unsigned is a deliberate cost tradeoff — see
-  [decisions.md](decisions.md).
-- `npm run release` — same build, but publishes it as a GitHub Release (`--publish always`),
-  which is also what `electron-updater` checks against for auto-updates. Requires a
-  `GH_TOKEN` with repo access in the environment — this is the manual path; normally CI does
-  this instead (below).
+- `npm run dist` — build an unsigned installer for whatever OS this runs on
+  (`electron-builder`; NSIS on Windows, dmg+zip on macOS) into `dist/`, without publishing.
+  Unsigned is a deliberate cost tradeoff on both platforms — see [decisions.md](decisions.md).
+- `npm run release` — same build, but publishes it as a GitHub Release (`--publish always`).
+  Requires a `GH_TOKEN` with repo access in the environment — this is the manual, single-OS
+  path; normally CI builds and publishes both platforms together (below).
+- `npm run mac:doctor` — macOS-only interactive harness (`scripts/mac-doctor.js`) that walks
+  every `wa/desktop.mac.js` primitive against a real chat, one step at a time. The intended
+  way to turn the macOS backend from "written but unverified" into something trustworthy.
 
 **Releasing is automatic on a version bump.** `.github/workflows/release.yml` runs on every
-push to `main` (repo is public, so Actions minutes are free). It reads `version` from
-`package.json` and checks whether a GitHub Release for `v<version>` already exists — if so,
-it exits doing nothing, which is what makes an ordinary commit (docs, a fix) ship nothing. If
-the version is new, it builds and publishes via `electron-builder --publish always`, using the
-repo's own built-in `GITHUB_TOKEN` (no secret to configure). **To ship an update: bump
-`version` in `package.json`, commit, push.** Nothing else.
+push to `main` (repo is public, so Actions minutes are free, including the `macos-latest`
+runner). It reads `version` from `package.json` and checks whether a GitHub Release for
+`v<version>` already exists — if so, it exits doing nothing, which is what makes an ordinary
+commit (docs, a fix) ship nothing. If the version is new, a `build-windows` job and a
+`build-macos` job run in parallel, each producing its own artifacts (electron-builder's own
+GitHub publisher was tried and dropped — it raced itself into two draft releases for one
+tag), and a final `release` job downloads both artifact sets and does one atomic
+`gh release create` with everything attached. **To ship an update: bump `version` in
+`package.json`, commit, push.** Nothing else.
 
-Every installed copy checks for updates on launch and after each campaign run ends
+### Windows: automatic, visible updates
+
+Every installed Windows copy checks for updates on launch and after each campaign run ends
 (`main.js`'s `checkForUpdates`), downloads in the background, and installs on the next quit
-even if the user never touches it. Unlike the original design, this is no longer silent:
-`update-status.js` is written by `main.js`'s `autoUpdater` event handlers
-(`checking-for-update`, `update-available`, `download-progress`, `update-downloaded`, `error`)
-and read by `GET /api/update-status` (`server.js`) — the renderer polls this (every 30s idle,
-every 1s while downloading/checking, since there's no IPC/preload channel to push it directly)
-and shows a banner under the header: progress while downloading, then a "Restart & install
-now" button once downloaded, which calls `POST /api/update-install` → `events.emit(
-"install-update")` → `autoUpdater.quitAndInstall(true, true)` in `main.js`. The app's current
-version is also shown in the header, so it's possible to confirm an update actually landed.
+even if the user never touches it. `update-status.js` is written by `main.js`'s `autoUpdater`
+event handlers (`checking-for-update`, `update-available`, `download-progress`,
+`update-downloaded`, `error`) and read by `GET /api/update-status` (`server.js`) — the
+renderer polls this (every 30s idle, every 1s while downloading/checking, since there's no
+IPC/preload channel to push it directly) and shows a banner under the header: progress while
+downloading, then a "Restart & install now" button once downloaded, which calls
+`POST /api/update-install` → `events.emit("install-update")` →
+`autoUpdater.quitAndInstall(true, true)` in `main.js`.
+
+### macOS: manual, notify-only updates
+
+macOS **cannot** use this mechanism: `electron-updater`'s macOS path (Squirrel.Mac) hard-
+requires a valid Developer ID code signature, and this app is unsigned (see
+[decisions.md](decisions.md) — no paid Apple account). CI never publishes a
+`latest-mac.yml`, so there's no feed for `electron-updater` to even attempt on macOS.
+Instead, `main.js`'s `checkForUpdatesMac()` calls the GitHub Releases API directly, compares
+the latest tag against `app.getVersion()`, and — if newer — sets `update-status.js` to
+`manual-available`. The same banner shows "Update vX.Y.Z available — Download", which calls
+`POST /api/update-open` → `shell.openExternal` to the release page; the user re-installs the
+`.dmg` by hand.
+
+### Accessibility permission (macOS only)
+
+Unlike Windows, macOS gates keystroke automation (`System Events keystroke`) behind the
+Accessibility privacy permission — this app cannot send a single message on a Mac without
+it. `main.js` polls `systemPreferences.isTrustedAccessibilityClient(false)` at launch and
+every 5s until granted, writing the result to `platform-status.js` (same bridge pattern as
+`update-status.js`). `GET /api/platform-status` exposes it; the frontend shows a blocking
+card with a "Grant access" button (`POST /api/request-accessibility`) that prompts and
+deep-links to System Settings → Privacy & Security → Accessibility. On Windows this state is
+always `null` and the card never renders.
+
+### Both platforms
+
 - The database path is set explicitly (`app.setName("whatsapp-blaster")`, called before
   `app.getPath('userData')` is ever read) so it can never drift if `productName` changes in
   a future edit — this is what keeps a user's saved settings and message template intact
   across updates.
+- `build/afterPack.js` ad-hoc re-signs the packed macOS `.app` (`codesign --sign -`) after
+  electron-builder packs it — Apple Silicon refuses to launch a completely unsigned app
+  ("damaged and can't be opened"), and `identity: null` alone doesn't add even that minimal
+  signature.

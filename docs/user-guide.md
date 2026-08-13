@@ -6,15 +6,22 @@ anything technical to use it — this guide covers everything from install to yo
 
 ## Before you install
 
-You need **WhatsApp Desktop** (the official Windows app from the Microsoft Store) already
-installed and **signed in** on this computer. This app does not log you into WhatsApp — it
-types and clicks into the WhatsApp Desktop window that's already open, the same way you
-would by hand, just faster and more consistently. If WhatsApp Desktop isn't running, the app
-will tell you plainly rather than fail silently.
+You need **WhatsApp** — WhatsApp Desktop (the official Windows app from the Microsoft
+Store) or WhatsApp for Mac — already installed and **signed in** on this computer. This app
+does not log you into WhatsApp — it types and clicks into the WhatsApp window that's already
+open, the same way you would by hand, just faster and more consistently. If WhatsApp isn't
+running, the app will tell you plainly rather than fail silently.
+
+> **macOS is currently BETA.** The Windows version has been used for real campaigns and
+> tested end-to-end; the macOS version was built and packaged but has not yet been run
+> against a real Mac. Rehearse (see Step 4 below) before trusting it with a real campaign,
+> and expect rough edges.
 
 ## Installing
 
-1. Download `WhatsApp Blaster Setup.exe` from the link you were given.
+### Windows
+
+1. Download `WhatsApp-Blaster-Setup-*.exe` from the link you were given.
 2. Double-click it. Windows will very likely show a blue **"Windows protected your PC"**
    screen. This is expected — the installer isn't digitally signed (that costs money every
    year, and this is an internal tool, not something sold to the public), so Windows is
@@ -25,6 +32,28 @@ will tell you plainly rather than fail silently.
    and in the Start Menu, so you can find it later by typing "WhatsApp Blaster" into the
    Windows search bar.
 4. Open it. The first launch may take a few seconds longer than usual.
+
+### macOS
+
+1. Download the `.dmg` from the link you were given, open it, and drag **WhatsApp Blaster**
+   into your Applications folder.
+2. Open it from Applications (or Spotlight). macOS will refuse the first launch with **"Apple
+   could not verify... is free of malware"** — this app isn't notarized (that requires a paid
+   Apple Developer account, an ongoing cost for a small internal tool). Unlike older macOS
+   versions, **right-click → Open no longer bypasses this** on current macOS (Sequoia and
+   later). Instead:
+   - Open **System Settings → Privacy & Security**.
+   - Scroll down — you'll see "WhatsApp Blaster was blocked..." with an **Open Anyway**
+     button. Click it, then confirm in the dialog that appears.
+3. On first real use, the app will show a banner asking for **Accessibility** permission —
+   click **Grant access**, then in the System Settings pane that opens, enable the toggle
+   next to WhatsApp Blaster. This is required: without it, macOS blocks the app from typing
+   into WhatsApp at all, and it cannot send a single message. (If you're running it via
+   `npm run electron` in development instead of the packaged app, grant permission to your
+   Terminal app instead — that's who's actually doing the typing in that case.)
+4. **This permission gets revoked by every app update** (a side effect of shipping unsigned —
+   see `docs/decisions.md` if you're curious why). You'll need to re-grant it after installing
+   a new version; the app will show the same banner again if so.
 
 ## The four steps
 
@@ -69,7 +98,7 @@ automatically — you cannot accidentally message the same person twice within o
 
 Click **Send Invites**. From this point:
 
-- **Keep the WhatsApp Desktop window visible and don't touch the mouse or keyboard** while a
+- **Keep the WhatsApp window visible and don't touch the mouse or keyboard** while a
   batch is running. The app is literally typing and clicking for you — anything that steals
   focus away from WhatsApp (clicking into another window, a popup notification grabbing
   focus) will make that one send fail. It'll usually recover and continue with the next
@@ -84,11 +113,22 @@ Click **Send Invites**. From this point:
 ## What "Submitted" actually means
 
 You'll see every result reported as **Submitted** or **Failed** — never "Delivered" or
-"Read". This is intentional and honest: WhatsApp Desktop doesn't give this app any way to
+"Read". This is intentional and honest: WhatsApp doesn't give this app any way to
 confirm a message actually arrived, only that the message was typed into the right chat and
 the Send action was triggered. **Submitted means sent, not confirmed received.** If you want
-delivery confirmation, check WhatsApp Desktop's own chat list — the usual grey/blue tick
+delivery confirmation, check WhatsApp's own chat list — the usual grey/blue tick
 marks are all still there, this app just can't read them.
+
+## Updates
+
+**Windows** checks for updates automatically and shows a banner when one's ready — click
+**Restart & install now**, or just close the app and it installs on its own.
+
+**macOS has no automatic updates** (this app is unsigned, and Apple's auto-update mechanism
+requires a paid signing certificate — see `docs/decisions.md`). When a new version is out,
+the same banner shows a **Download** button that opens the release page in your browser;
+install the new `.dmg` the same way you did the first time, and re-grant Accessibility
+permission afterward (see Installing → macOS, step 4).
 
 ## Editing the message
 
@@ -160,3 +200,12 @@ from this end.
 **The app won't start / shows an error dialog on launch** — note the exact error message,
 then try restarting your computer once (this clears any lingering PowerShell or WhatsApp
 processes) before asking for help.
+
+**(macOS) The Accessibility banner won't go away after granting access** — quit and reopen
+the app; macOS's permission check doesn't always take effect instantly for a running process.
+
+**(macOS) Nothing happens when a send starts, or it fails on every recipient** — this is the
+newest, least-tested part of the app (see the beta note above). Re-check Accessibility
+permission first (Installing → macOS, step 3), then rehearse with **Rehearse (nothing is
+sent)** before a real run — it exercises the same automation without sending, which is safer
+for diagnosing a stuck step.

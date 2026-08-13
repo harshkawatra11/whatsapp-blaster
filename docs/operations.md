@@ -5,6 +5,13 @@ number at risk of being flagged or banned. Nothing in the app stops you from sen
 than recommended here — the pacing settings are deliberately uncapped — but going faster is
 a real risk, not just a suggestion being cautious for no reason.
 
+**As of the current default, the inter-recipient delay is 0s** (changed from a randomised
+8-20s gap at explicit operator request, to cut per-recipient time down to roughly the ~8s the
+automation itself takes). This is a real reduction in anti-ban protection, not just a speed
+tweak — a fixed, back-to-back sending rhythm is closer to what an automated sender looks
+like than a randomised one. If a number gets flagged, raising the min/max delay in Settings
+back up is the first thing to try.
+
 ## The settings that matter
 
 All of these live in Step 1's Settings, editable any time (mid-run changes apply to the
@@ -12,7 +19,7 @@ All of these live in Step 1's Settings, editable any time (mid-run changes apply
 
 | Setting | Default | What it does |
 |---|---|---|
-| Min / max delay between sends | 8s / 20s | A random gap in this range before every send. Randomised, not fixed, because a perfectly regular interval is itself a bot signal. |
+| Min / max delay between sends | 0s / 0s | A random gap in this range before every send, on top of the ~8s the automation itself already takes per recipient (open chat, paste, verify, send). **Set to zero at explicit operator request** to remove that added wait — every send now moves to the next recipient the instant the previous one finishes. This was the app's main defence against looking automated; raising it back is just a Settings-panel edit. |
 | Batch size | 50 | After this many sends, the app takes a longer pause (2-4 minutes, randomised) before continuing. |
 | Daily cap | 200 | Hard stop — once this many messages have gone out from a sender number in the last 24 hours, the run skips every remaining recipient rather than continuing. |
 | Default country code | 91 | Applied to any bare 10-digit phone number in an uploaded CSV. |
