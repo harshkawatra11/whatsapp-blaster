@@ -148,6 +148,8 @@
   .dropzone-text { font-size: 0.8rem; color: var(--muted); }
   .dropzone-text strong { color: var(--accent); }
   .dropzone.loaded { border-color: var(--accent2); background: rgba(74,222,128,0.03); }
+  .dropzone-sm { padding: 16px 20px; }
+  .dropzone-sm .dropzone-text { font-size: 0.74rem; }
 
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
@@ -341,6 +343,19 @@
     <div class="row-2" style="margin-bottom:14px">
       <div><label>Poster image link</label><input type="text" id="tplPosterLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
       <div><label>Brochure link</label><input type="text" id="tplBrochureLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <label>Or upload a poster image directly</label>
+      <div class="dropzone dropzone-sm" id="posterDropzone">
+        <input type="file" id="posterUploadFile" accept="image/*" onchange="uploadPoster()" />
+        <div class="dropzone-text" id="posterDzText"><strong>Click to browse</strong> or drag &amp; drop an image here — replaces the link above, since only one poster source can be active at a time</div>
+      </div>
+      <div id="posterUploadedRow" class="hidden" style="display:flex; align-items:center; gap:12px; margin-top:10px;">
+        <img id="posterThumb" src="" alt="Uploaded poster" style="width:52px; height:52px; object-fit:cover; border-radius:8px; border:1px solid var(--border2);" />
+        <span id="posterUploadedName" style="font-size:0.78rem; color:var(--muted); flex:1;">Local image active</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="removePosterUpload()">✕ Remove</button>
+      </div>
     </div>
     <div id="tplLinkWarn" class="tpl-warn hidden"></div>
 
@@ -632,6 +647,12 @@ function isValidUrl(s) {
   try { new URL(s); return true; } catch { return false; }
 }
 
+// Tracks whether a local poster is currently uploaded — kept as plain state
+// alongside the form fields (not re-derived from the DOM) since the link
+// input is disabled/blanked while an upload is active and no longer
+// carries that information itself.
+let posterUploadActive = false;
+
 function renderTplPreview() {
   const text = $('tplText').value;
   const fallback = $('tplFallback').value.trim();
@@ -641,7 +662,7 @@ function renderTplPreview() {
   // hypothetical — otherwise a blank name in the actual file wouldn't be
   // visible until a real send.
   const row = recipients.length ? recipients[0] : TPL_SAMPLE_ROW;
-  const effectivePoster = (row.posterLink || posterLink || '').trim();
+  const effectivePoster = (row.posterLink || (posterUploadActive ? 'local-upload' : posterLink) || '').trim();
   const effectiveBrochure = (row.brochureLink || brochureLink || '').trim();
   let filled = fillTemplatePreview(text, row, fallback);
   filled = appendBrochureLinePreview(filled, effectiveBrochure);
@@ -687,6 +708,24 @@ function insertChip(field) {
   renderTplPreview();
 }
 
+// Reflects posterUploadFilename into the UI: shows the thumbnail + remove
+// row, hides the dropzone, and disables/blanks the link field. Called after
+// every load/upload/remove so the three stay in sync with whatever the
+// server actually has, rather than trusting optimistic local state.
+function renderPosterUploadState(filename) {
+  posterUploadActive = !!filename;
+  $('posterDropzone').classList.toggle('hidden', posterUploadActive);
+  $('posterUploadedRow').classList.toggle('hidden', !posterUploadActive);
+  $('tplPosterLink').disabled = posterUploadActive;
+  if (posterUploadActive) {
+    $('tplPosterLink').value = '';
+    $('tplPosterLink').placeholder = 'cleared — a local image is active (Remove it to use a link instead)';
+    $('posterThumb').src = '/api/settings/poster-upload?t=' + Date.now();
+  } else {
+    $('tplPosterLink').placeholder = 'https://drive.google.com/file/d/…/view';
+  }
+}
+
 async function loadTemplate() {
   try {
     const s = await (await fetch('/api/settings')).json();
@@ -694,8 +733,41 @@ async function loadTemplate() {
     $('tplFallback').value = s.nameFallback || 'there';
     $('tplPosterLink').value = s.posterLink || '';
     $('tplBrochureLink').value = s.brochureLink || '';
+    renderPosterUploadState(s.posterUploadFilename || '');
     renderTplPreview();
   } catch (e) { toast('Could not load the message template: ' + e.message, 'error'); }
+}
+
+async function uploadPoster() {
+  const file = $('posterUploadFile').files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/settings/poster-upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to upload the poster image');
+    renderPosterUploadState(data.posterUploadFilename);
+    renderTplPreview();
+    toast('Poster image uploaded — it will be attached to every message', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    $('posterUploadFile').value = '';
+  }
+}
+
+async function removePosterUpload() {
+  try {
+    const res = await fetch('/api/settings/poster-upload', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to remove the uploaded poster');
+    renderPosterUploadState(data.posterUploadFilename || '');
+    renderTplPreview();
+    toast('Uploaded poster removed', 'info');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function resetTemplate() {
@@ -731,9 +803,17 @@ async function saveTemplate() {
 // Settings/template edits during a run wouldn't take effect anyway —
 // runCampaign() reads them once at the start — so disabling avoids a
 // confusing no-op edit mid-batch, matching the guards already on
-// startOver()/sendAnotherBatch().
+// startOver()/sendAnotherBatch(). tplPosterLink is handled separately below:
+// it must stay disabled after a run ends too if a local upload is still
+// active, which a blind `.disabled = false` here would otherwise undo.
 function setTemplateEditorDisabled(disabled) {
-  ['tplText', 'tplFallback', 'tplPosterLink', 'tplBrochureLink', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
+  ['tplText', 'tplFallback', 'tplBrochureLink', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
+  $('tplPosterLink').disabled = disabled || posterUploadActive;
+  $('posterUploadFile').disabled = disabled;
+  $('posterDropzone').style.pointerEvents = disabled ? 'none' : '';
+  $('posterDropzone').style.opacity = disabled ? '0.5' : '';
+  const removeBtn = $('posterUploadedRow').querySelector('button');
+  if (removeBtn) removeBtn.disabled = disabled;
 }
 
 async function confirmSenderNumber() {
@@ -766,6 +846,14 @@ dz.addEventListener('drop', (e) => {
   if (e.dataTransfer.files[0]) { $('csvFile').files = e.dataTransfer.files; uploadCsv(); }
 });
 $('csvFile').addEventListener('change', uploadCsv);
+
+const posterDz = $('posterDropzone');
+posterDz.addEventListener('dragover', (e) => { e.preventDefault(); posterDz.classList.add('dragover'); });
+posterDz.addEventListener('dragleave', () => posterDz.classList.remove('dragover'));
+posterDz.addEventListener('drop', (e) => {
+  e.preventDefault(); posterDz.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) { $('posterUploadFile').files = e.dataTransfer.files; uploadPoster(); }
+});
 
 async function uploadCsv() {
   const file = $('csvFile').files[0];
@@ -958,7 +1046,7 @@ function resetSendUi() {
 // on the same shared DB is untouched). WhatsApp Desktop itself is untouched.
 async function startOver() {
   if (sending) return toast('Abort the running batch first', 'error');
-  if (!confirm('Start over? This clears your campaign history and the loaded CSV.')) return;
+  if (!confirm('Start over? This clears your campaign history, the loaded CSV, and any uploaded poster image.')) return;
 
   if (senderId) {
     await fetch('/api/campaigns?senderId=' + encodeURIComponent(senderId), { method: 'DELETE' }).catch(() => {});
@@ -984,9 +1072,12 @@ async function startOver() {
   resetSendUi();
   await loadNumbers();
   // Deliberately NOT calling loadTemplate() here — Start Over clears this
-  // sender's campaign history, never the saved message template. The
-  // preview just needs to fall back from the (now-cleared) real CSV row
-  // back to the sample row.
+  // sender's campaign history, never the saved message template or the
+  // poster/brochure LINK settings. The uploaded poster image is the one
+  // exception (server.js's DELETE /api/campaigns already deleted the file
+  // and cleared posterUploadFilename) — reflect that locally instead of a
+  // full reload, same reasoning as skipping loadTemplate() above.
+  renderPosterUploadState('');
   renderTplPreview();
   goStep(1);
   toast('Cleared. Pick a sender number to start again.', 'info');
