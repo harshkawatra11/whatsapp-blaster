@@ -160,6 +160,18 @@ no way to reach it (no Google sign-in happens anywhere in this app).
 - **Poster** — sent as a real image attachment, with your message as its caption. The app
   downloads it once before a run starts (not once per recipient), then attaches the same
   local copy to every message.
+  - **Or skip the Drive link entirely and upload the image directly** — click or drag a file
+    onto the **"Or upload a poster image directly"** box just below the link field. This is
+    the faster option if the picture is already sitting on your computer: no Drive account,
+    no sharing settings to get right. The two are mutually exclusive — uploading a file
+    clears and disables the link field (a small thumbnail + **✕ Remove** button appear
+    instead), and removing the upload re-enables the link. Whichever one is active is what
+    every recipient gets attached, exactly the same way either source is used.
+  - **The uploaded image stays active across every future send** — it's not tied to one
+    campaign — until you either remove it, upload a different image over it, or click **Start
+    over**, which now also clears the uploaded poster along with the campaign history (see
+    below). A per-row `POSTER LINK`/`ATTACHMENT LINK` value in your CSV still overrides
+    whichever source (link or upload) is active, for that row only, same as before.
 - **Brochure** — added as a plain link line under your message: `View Brochure: <link>`.
   WhatsApp has no way to hide a link behind other text, so the link itself is what recipients
   see and tap — but it's tappable either way, since WhatsApp auto-detects any bare

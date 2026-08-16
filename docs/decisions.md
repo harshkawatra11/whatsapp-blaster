@@ -296,3 +296,38 @@ back, shipping a future update with different default wording would silently rew
 message for every operator who had never explicitly edited it. See
 [architecture.md](architecture.md) for the mechanics (`app.setName()` pinning the database
 path, `seedTemplateIfMissing()`, additive-only schema migrations).
+
+**One deliberate exception, added with the local-poster-upload feature:** "Start over" now
+*also* deletes an uploaded poster image (file + the `posterUploadFilename` setting), even
+though every other setting — template, name fallback, poster/brochure **links** — stays
+exactly as sticky as described above. Reasoning, confirmed with the operator before
+building it: a locally uploaded file is closer to "this run's" state than a durable
+preference like a Drive link (which is just text, costs nothing to leave sitting in a
+field) — an operator who's done with an event and clicks the one button that's supposed to
+reset everything shouldn't have to separately remember to remove an old poster image too.
+
+## Locally-uploaded poster image, as an alternative to a Drive link
+
+The Drive-link poster flow (get the file into Drive, share it "Anyone with the link", copy
+the link) is real friction for a non-technical operator who already has the image file
+sitting on their computer. Added a second, mutually-exclusive source: upload the image
+directly through the browser.
+
+**Mutually exclusive by design, not just convention.** Uploading clears `posterLink`
+server-side in the same request that sets `posterUploadFilename` (`server.js`'s
+`POST /api/settings/poster-upload`), not only in the UI — so there's no state where both are
+set and some runtime rule has to decide which one "really" applies. `wa/sender.js`'s
+`effectivePoster()` still has a local-wins tiebreaker as a defensive fallback, but the normal
+path never reaches it.
+
+**Single-slot storage, not a library.** `data/local-poster/` only ever holds one file
+(`wa/attachments.js`'s `saveLocalPoster()` deletes whatever was there before writing the
+new one) — there's no gallery, no history, no per-campaign versioning. This matches the
+feature's actual shape: one event, one poster, replace it when it changes. Keeping it
+single-slot means there's nothing to garbage-collect and no orphaned-file accumulation to
+worry about.
+
+**Reused validation, not reinvented.** `saveLocalPoster()` checks the upload against the same
+`MAX_BYTES` (WhatsApp's real 16MB limit) and `EXT_BY_MIME` (jpeg/png/gif/webp) constants
+`downloadDriveFile()` already enforces for a Drive-sourced poster — a local upload can't
+silently exceed a limit the link path already respects.

@@ -61,7 +61,7 @@ comparison and avoids SQLite's text-based date functions entirely.
 | `wa_sessions` | Sender numbers the operator has confirmed. **Not** a WhatsApp login — WhatsApp Desktop owns its own session entirely; this table only labels which number is "active" for daily-cap tracking. |
 | `campaigns` | One row per CSV upload. `status`: `draft` → `running` → `done` / `aborted`. |
 | `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. `poster_link`/`brochure_link` (nullable) carry a per-row override from an optional `POSTER LINK`/`ATTACHMENT LINK` CSV column. |
-| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the event-level `posterLink`/`brochureLink` fallback — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
+| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the event-level `posterLink`/`brochureLink` fallback (plus `posterUploadFilename`, mutually exclusive with `posterLink` — see decisions.md) — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`, set per-connection since SQLite
 disables this by default) — deleting a campaign cascades to its recipients.
@@ -75,8 +75,8 @@ follow the same pattern.
 
 ## HTTP API
 
-All routes are local-only (`127.0.0.1`), JSON in/out except the CSV upload (multipart) and
-the send route (NDJSON stream).
+All routes are local-only (`127.0.0.1`), JSON in/out except the CSV/poster uploads
+(multipart) and the send route (NDJSON stream).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -84,12 +84,15 @@ the send route (NDJSON stream).
 | GET | `/api/settings` | Current pacing/cap/country/template settings (merged with defaults). |
 | POST | `/api/settings` | Partial update — merges over current settings, validates, persists. |
 | GET | `/api/template/default` | The built-in default message, for the editor's "Reset to default". |
+| POST | `/api/settings/poster-upload` | Upload a poster image directly (multipart, field `file`, ≤16MB) — saves it to `data/local-poster/`, sets `posterUploadFilename`, clears `posterLink` (mutually exclusive with a Drive link — see decisions.md). |
+| DELETE | `/api/settings/poster-upload` | Removes the uploaded poster (deletes the file, clears `posterUploadFilename`). |
+| GET | `/api/settings/poster-upload` | Streams the raw uploaded image, for the frontend's thumbnail. 404 if nothing uploaded. |
 | GET | `/api/numbers` | List configured sender numbers, with live `ready`/`app_not_running` status. |
 | POST | `/api/numbers` | Register a sender number. |
 | DELETE | `/api/numbers/:id` | Remove a sender number. |
 | POST | `/api/campaigns` | Upload a CSV (multipart, field `file` + `senderId`) → creates a campaign and its recipients in one transaction. |
 | GET | `/api/campaigns/:id` | Campaign + all its recipients. |
-| DELETE | `/api/campaigns?senderId=` | "Start over" — purges all campaigns (and cascaded recipients) for one sender. |
+| DELETE | `/api/campaigns?senderId=` | "Start over" — purges all campaigns (and cascaded recipients) for one sender, and deletes an uploaded poster if one is active (the one setting Start Over resets — see decisions.md). |
 | POST | `/api/campaigns/:id/send` | Body `{ snos: number[] }`. Streams NDJSON progress, one line per event. Rejects with 409 if a send is already running (only one at a time, system-wide). |
 | POST | `/api/campaigns/:id/abort` | Cooperative abort of the campaign's active send. 404 if nothing is running for that id. |
 
@@ -117,10 +120,13 @@ runCampaign()
   → settingsDb.getSettings()        (read fresh — a mid-run settings edit is deliberately
                                       NOT picked up until the next run starts)
   → preflightAttachments()           (BEFORE focusing WhatsApp — pure network I/O)
-      → every DISTINCT poster link (per-row override, else the event-level setting) is
-        DOWNLOADED once via wa/attachments.js and cached to disk — not once per
-        recipient, since a shared event-level poster means a dead link would otherwise
-        fail identically on every recipient using it.
+      → every DISTINCT poster (per-row CSV override, else the event-level setting — which
+        is EITHER a Drive link OR a local upload, see effectivePoster()/posterKey()) is
+        resolved once: a link is DOWNLOADED via wa/attachments.js and cached to disk; a
+        local upload is just confirmed still present on disk (attachments.resolveLocalPoster,
+        no network) — not once per recipient either way, since a shared event-level poster
+        means a dead link (or a deleted upload) would otherwise fail identically on every
+        recipient using it.
       → every distinct brochure link gets a HEAD reachability check (warns, never
         blocks) plus a one-time TinyURL shortening of the raw Drive share link — a
         shortening failure falls back silently to the original link, no warning.
@@ -128,9 +134,10 @@ runCampaign()
   → overlay.start()
   → for each recipient:
       skip if already 'skipped', or daily cap reached, or operator aborted
-      → resolve this row's effective poster/brochure link (row's own CSV value wins,
-        settings value is the fallback); append "View Brochure: <url>" to the text
-        when configured (the poster is NOT appended as text — see below)
+      → resolve this row's effective poster (effectivePoster(): row's own CSV link wins,
+        else the event-level upload, else the event-level link) and brochure link (row's
+        own CSV value wins, settings value is the fallback); append "View Brochure: <url>"
+        to the text when configured (the poster is NOT appended as text — see below)
       → sendOne(phone, text, dryRun, posterLocalPath):
           resetToCleanState → openChatByNumber →
           POSTER path: setClipboardImage → pasteImage → pasteCaption(text) →
