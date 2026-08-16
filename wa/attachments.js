@@ -139,9 +139,71 @@ function clearMemoryCache() {
   shortenCache.clear();
 }
 
+// A directly-uploaded poster, as an alternative to a Drive link. Single
+// slot deliberately — one active local poster at a time, so there's never
+// more than one file on disk and nothing to garbage collect. Separate
+// directory from CACHE_DIR: Drive downloads are addressed by file ID and
+// safe to accumulate/reuse across links, but an upload has no such stable
+// identity (a re-upload of "the same" file has no id to key on), so it's
+// simplest as one always-overwritten slot instead.
+const LOCAL_POSTER_DIR = path.join(DATA_DIR, "local-poster");
+
+// Resolves the stored filename (as saved in settings.posterUploadFilename)
+// to an absolute path, confirming the file still exists on disk. Returns
+// null when no filename is given (nothing configured — not an error);
+// { ok:false, error } when a filename IS configured but the file is
+// missing (deleted by hand, moved userData, etc) — same shape
+// downloadDriveFile's failure returns, so callers can treat both
+// poster sources identically.
+function resolveLocalPoster(filename) {
+  if (!filename) return null;
+  const p = path.join(LOCAL_POSTER_DIR, filename);
+  return fs.existsSync(p) ? { ok: true, path: p } : { ok: false, error: "uploaded poster file is missing on disk" };
+}
+
+// Validates and saves an uploaded poster buffer, replacing any previous
+// upload. Reuses the same MAX_BYTES/EXT_BY_MIME rules as a Drive download,
+// so a local upload can't silently exceed WhatsApp's own 16MB limit or
+// arrive as a non-image. Returns { ok:true, filename } or { ok:false, error }.
+function saveLocalPoster(buffer, mimeType) {
+  if (!buffer || buffer.length === 0) return { ok: false, error: "uploaded file was empty" };
+  if (buffer.length > MAX_BYTES) {
+    return { ok: false, error: `image is ${(buffer.length / 1024 / 1024).toFixed(1)}MB — WhatsApp's own limit is 16MB` };
+  }
+  const ext = EXT_BY_MIME[mimeType];
+  if (!ext) return { ok: false, error: `unsupported image type "${mimeType}" — use JPEG, PNG, GIF, or WebP` };
+
+  fs.mkdirSync(LOCAL_POSTER_DIR, { recursive: true });
+  // Clear out any previous upload first (possibly a different extension)
+  // so the single-slot guarantee holds even across a JPEG-then-PNG
+  // sequence of uploads.
+  for (const f of fs.readdirSync(LOCAL_POSTER_DIR)) {
+    fs.unlinkSync(path.join(LOCAL_POSTER_DIR, f));
+  }
+  const filename = `local-poster${ext}`;
+  fs.writeFileSync(path.join(LOCAL_POSTER_DIR, filename), buffer);
+  return { ok: true, filename };
+}
+
+// Best-effort delete — used both by "Remove upload" and by Start over.
+// Never throws: a file already gone (or never existing) isn't a failure
+// from the caller's point of view, since the end state (no local poster on
+// disk) is the same either way.
+function deleteLocalPoster(filename) {
+  if (!filename) return;
+  try {
+    fs.unlinkSync(path.join(LOCAL_POSTER_DIR, filename));
+  } catch {
+    /* already gone */
+  }
+}
+
 module.exports = {
   checkLinkReachable,
   downloadDriveFile,
   shortenUrl,
   clearMemoryCache,
+  resolveLocalPoster,
+  saveLocalPoster,
+  deleteLocalPoster,
 };

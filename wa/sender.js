@@ -180,31 +180,57 @@ function effectiveLink(rowLink, settingsLink) {
   return rowLink || settingsLink || null;
 }
 
-// Poster is downloaded ONCE per distinct link before the send loop starts
-// (a shared event-level poster means a dead link would otherwise fail
-// identically on every recipient using it — better to find that once, up
-// front). Brochure stays a link — it gets the cheap reachability check plus
-// a one-time TinyURL shortening of the raw Drive share link, since the raw
-// link is long and ugly but still autolinks fine either way. Returns
-// { posterResults, brochureResults }, both Map<originalLink, result>.
+// Same precedence as effectiveLink, but the event-level poster can now be
+// EITHER a Drive link OR a directly-uploaded local image (mutually
+// exclusive — enforced where the setting is saved, server.js's
+// /api/settings/poster-upload clears posterLink on upload, and the UI
+// disables the link field while an upload is active). A per-row CSV value
+// is always a link (there's no per-row upload mechanism) and still wins
+// over either event-level source, matching effectiveLink's rule exactly.
+// If both event-level settings were somehow non-empty, the upload wins —
+// it's already sitting on disk with nothing to fetch.
+function effectivePoster(row, settings) {
+  if (row.posterLink) return { kind: "link", link: row.posterLink };
+  if (settings.posterUploadFilename) return { kind: "local", filename: settings.posterUploadFilename };
+  if (settings.posterLink) return { kind: "link", link: settings.posterLink };
+  return null;
+}
+
+function posterKey(poster) {
+  if (!poster) return null;
+  return poster.kind === "local" ? `local:${poster.filename}` : `link:${poster.link}`;
+}
+
+// Poster is resolved ONCE per distinct source before the send loop starts
+// (a shared event-level poster means a dead link, or a deleted upload,
+// would otherwise fail identically on every recipient using it — better to
+// find that once, up front). A link is downloaded via attachments.js as
+// before; a local upload is just confirmed still present on disk (no
+// network involved). Brochure stays a link — it gets the cheap
+// reachability check plus a one-time TinyURL shortening of the raw Drive
+// share link, since the raw link is long and ugly but still autolinks fine
+// either way. Returns { posterResults, brochureResults } — posterResults is
+// Map<posterKey, result>, brochureResults is Map<originalLink, result>.
 async function preflightAttachments(recipients, settings, onEvent) {
   attachments.clearMemoryCache();
-  const posterLinks = new Set();
+  const posters = new Map(); // posterKey -> descriptor
   const brochureLinks = new Set();
   for (const row of recipients) {
     if (row.state === "skipped") continue;
-    const poster = effectiveLink(row.posterLink, settings.posterLink);
+    const poster = effectivePoster(row, settings);
+    if (poster) posters.set(posterKey(poster), poster);
     const brochure = effectiveLink(row.brochureLink, settings.brochureLink);
-    if (poster) posterLinks.add(poster);
     if (brochure) brochureLinks.add(brochure);
   }
 
   const posterResults = new Map();
-  for (const link of posterLinks) {
-    const result = await attachments.downloadDriveFile(link);
-    posterResults.set(link, result);
+  for (const [key, poster] of posters) {
+    const result =
+      poster.kind === "local" ? attachments.resolveLocalPoster(poster.filename) : await attachments.downloadDriveFile(poster.link);
+    posterResults.set(key, result);
     if (!result.ok) {
-      onEvent({ type: "warning", message: `poster image unavailable (${link}): ${result.error}` });
+      const label = poster.kind === "local" ? "uploaded poster" : `poster image (${poster.link})`;
+      onEvent({ type: "warning", message: `${label} unavailable: ${result.error}` });
     }
   }
   const brochureResults = new Map();
@@ -296,19 +322,20 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
       attempts++;
       overlay.update({ counts: overlayCounts(), current: `${row.name || "?"} (${row.phone})`, status: "sending..." });
 
-      const posterLink = effectiveLink(row.posterLink, settings.posterLink);
+      const poster = effectivePoster(row, settings);
       const brochureLink = effectiveLink(row.brochureLink, settings.brochureLink);
       let text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
       text = appendBrochureLine(text, brochureLink ? brochureResults.get(brochureLink) : null);
 
       let result;
-      const posterDownload = posterLink ? posterResults.get(posterLink) : null;
-      if (posterLink && !posterDownload?.ok) {
+      const posterResult = poster ? posterResults.get(posterKey(poster)) : null;
+      if (poster && !posterResult?.ok) {
         // Already logged loudly once at preflight — don't retry the same
-        // download per recipient, just report the consequence.
-        result = { outcome: "error", error: `poster image unavailable: ${posterDownload?.error || "download failed"}` };
+        // resolution per recipient, just report the consequence.
+        const label = poster.kind === "local" ? "uploaded poster" : "poster image";
+        result = { outcome: "error", error: `${label} unavailable: ${posterResult?.error || "unavailable"}` };
       } else {
-        result = await sendOne(row.phone, text, dryRun, posterDownload?.path);
+        result = await sendOne(row.phone, text, dryRun, posterResult?.path);
       }
 
       const state =

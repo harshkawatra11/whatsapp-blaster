@@ -33,6 +33,14 @@ const DEFAULTS = {
   // per-row (wa/sender.js); this is the fallback, not an override of it.
   posterLink: "",
   brochureLink: "",
+  // Set instead of posterLink when the operator uploads an image directly
+  // rather than pasting a Drive link — just the filename under
+  // data/local-poster/ (wa/attachments.js resolves it to an absolute path).
+  // Mutually exclusive with posterLink in practice (enforced by the
+  // /api/settings/poster-upload route clearing posterLink on upload, and
+  // by the UI disabling the link field while this is set) — wa/sender.js's
+  // effectivePoster() treats a non-empty value here as taking precedence.
+  posterUploadFilename: "",
 };
 
 const NUMERIC_KEYS = new Set(["sendMinDelayMs", "sendMaxDelayMs", "sendBatchSize", "dailyCap"]);

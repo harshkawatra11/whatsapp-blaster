@@ -11,6 +11,7 @@ const settingsDb = require("./db/settings");
 const desktop = require("./wa/desktop");
 const audience = require("./wa/audience");
 const sender = require("./wa/sender");
+const attachments = require("./wa/attachments");
 const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("./template");
 const updateStatus = require("./update-status");
 const platformStatus = require("./platform-status");
@@ -31,6 +32,23 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     if (!/\.csv$/i.test(file.originalname || "")) {
       return cb(new Error("Only .csv files are accepted"));
+    }
+    cb(null, true);
+  },
+});
+
+// Separate multer instance from the CSV upload above — a poster image needs
+// WhatsApp's own 16MB ceiling (not the CSV route's 5MB) and an image
+// mimetype instead of .csv. Only a cheap "is this even an image" gate here
+// — attachments.saveLocalPoster is the single source of truth for exactly
+// which formats are supported (it already has to know, to pick the file
+// extension), so the real validation isn't duplicated in two places.
+const uploadPoster = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024, files: 1, fields: 0, parts: 2 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//.test(file.mimetype || "")) {
+      return cb(new Error("Only image files are accepted"));
     }
     cb(null, true);
   },
@@ -81,6 +99,52 @@ app.post("/api/settings", async (req, res) => {
     res.json(await settingsDb.saveSettings(req.body || {}));
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// --- Locally-uploaded poster -----------------------------------------------
+// Alternative to a Drive link (posterLink): the operator uploads the image
+// file directly instead of setting up a public share link. Mutually
+// exclusive with posterLink by design — uploading here clears it, and the
+// frontend disables the link field while an upload is active — so
+// wa/sender.js's effectivePoster() never has to guess which one is "real".
+
+app.post("/api/settings/poster-upload", uploadPoster.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Image file is required" });
+    const saved = attachments.saveLocalPoster(req.file.buffer, req.file.mimetype);
+    if (!saved.ok) return res.status(400).json({ error: saved.error });
+    const settings = await settingsDb.saveSettings({ posterUploadFilename: saved.filename, posterLink: "" });
+    res.json(settings);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/settings/poster-upload", async (req, res, next) => {
+  try {
+    const current = await settingsDb.getSettings();
+    attachments.deleteLocalPoster(current.posterUploadFilename);
+    const settings = await settingsDb.saveSettings({ posterUploadFilename: "" });
+    res.json(settings);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Serves the raw uploaded image so the frontend can show a thumbnail —
+// nothing under data/ is otherwise reachable over HTTP (only public/ is
+// statically served). 404 (not an error) when nothing is uploaded, so the
+// frontend can just point an <img> here and handle a broken image the same
+// way as "not uploaded".
+app.get("/api/settings/poster-upload", async (req, res, next) => {
+  try {
+    const settings = await settingsDb.getSettings();
+    const local = attachments.resolveLocalPoster(settings.posterUploadFilename);
+    if (!local?.ok) return res.status(404).end();
+    res.sendFile(local.path);
+  } catch (e) {
+    next(e);
   }
 });
 
@@ -235,12 +299,22 @@ app.get("/api/campaigns/:id", async (req, res, next) => {
   }
 });
 
-// "Start over": clears campaign history for ONE sender.
+// "Start over": clears campaign history for ONE sender, AND — unlike every
+// other setting, which is deliberately sticky across "Start over" (see
+// docs/decisions.md) — deletes any uploaded local poster. An uploaded image
+// is treated as part of "this run's" state, not a durable preference like
+// the message template or a Drive link, so this is the one thing "Start
+// over" actually resets in Settings.
 app.delete("/api/campaigns", async (req, res, next) => {
   try {
     const senderId = req.query.senderId;
     if (!senderId) return res.status(400).json({ error: "senderId is required" });
     await campaigns.purgeCampaignsForSender(senderId);
+    const settings = await settingsDb.getSettings();
+    if (settings.posterUploadFilename) {
+      attachments.deleteLocalPoster(settings.posterUploadFilename);
+      await settingsDb.saveSettings({ posterUploadFilename: "" });
+    }
     res.json({ ok: true });
   } catch (e) {
     next(e);
