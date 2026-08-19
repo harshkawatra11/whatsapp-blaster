@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-blaster",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "description": "Bulk WhatsApp invite automation, driving WhatsApp Desktop directly",
   "main": "main.js",
@@ -64,14 +64,21 @@
       ],
       "icon": "build/icon.png",
       "category": "public.app-category.productivity",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSAppleEventsUsageDescription": "WhatsApp Blaster needs to send keystrokes to WhatsApp to open chats and paste your message."
       }
     },
-    "afterPack": "build/afterPack.js",
+    "dmg": {
+      "window": { "width": 540, "height": 400 },
+      "contents": [
+        { "x": 140, "y": 200, "type": "file" },
+        { "x": 400, "y": 200, "type": "link", "path": "/Applications" },
+        { "x": 270, "y": 340, "path": "build/dmg-readme.txt" }
+      ]
+    },
     "publish": {
       "provider": "github",
       "owner": "harshkawatra11",

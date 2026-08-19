@@ -108,6 +108,22 @@ jobs:
       - name: Build (no publish)
         run: npx electron-builder --publish never
 
+      # This app has never been proven to actually launch on someone else's
+      # Mac (see docs/decisions.md — the Gatekeeper "This software needs to
+      # be updated" dialog is the signature of an ad-hoc signature, which is
+      # all that's possible without a paid Apple Developer ID). What CAN be
+      # verified here is that the signature itself is well-formed —
+      # `identity: "-"` producing a malformed/partial signature would fail
+      # in a way that's much harder to diagnose from a bug report than from
+      # a failed CI step. `--strict` matches what Gatekeeper itself checks.
+      - name: Verify ad-hoc code signature
+        run: |
+          for app in dist/mac*/*.app; do
+            echo "=== $app ==="
+            codesign --verify --strict --verbose=2 "$app"
+            codesign -dvv "$app"
+          done
+
       - name: Rename installers to match Windows' dash convention
         run: |
           for f in dist/*.dmg dist/*.zip; do
@@ -145,5 +161,9 @@ jobs:
           gh release create "v${{ needs.check.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.check.outputs.version }}" \
-            --notes "Automated release for v${{ needs.check.outputs.version }}. macOS build is UNVERIFIED — see docs/decisions.md." \
+            --notes "Automated release for v${{ needs.check.outputs.version }}.
+
+          **macOS install:** drag the app into Applications from the .dmg (don't run it from the disk image), then in Terminal:
+          \`xattr -dr com.apple.quarantine \"/Applications/WhatsApp Blaster.app\"\`
+          This app isn't signed with a paid Apple certificate, so macOS quarantines it on download — the command above clears that flag. Repeat it after every update. Full details: docs/user-guide.md." \
             dist/*.exe dist/latest.yml dist/*.dmg dist/*.zip
