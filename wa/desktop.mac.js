@@ -32,7 +32,8 @@ const BLASTER_BUNDLE_ID = "org.whatsappblaster.app";
 // inlined, so `mac:doctor` output can be pasted straight over this block.
 const TIMINGS = {
   afterActivate: 400, // before checking frontmost after `activate`
-  afterNewChat: 900, // after Cmd+N, before typing digits
+  afterNewChat: 900, // after Cmd+N, before locating/clicking the search field
+  afterSearchFieldFocus: 200, // after focusing/clicking the search field, before typing digits
   afterDigits: 2500, // after typing digits, before Enter (search settle)
   afterChatOpen: 1500, // after Enter selects the chat
   afterSelectAll: 150,
@@ -271,10 +272,32 @@ function keystrokeScript(lines) {
   return `tell application "System Events"\n${lines}\nend tell`;
 }
 
-// Opens a chat by number: Cmd+N (New Chat), type the digits, Return selects
-// the first search result — the direct analogue of Ctrl+N on Windows. Same
-// trade-off as Windows: there is no way to confirm WHICH contact this
-// opened, only whether the resulting composer accepts a paste
+// Opens a chat by number: Cmd+N (New Chat), CLICK the search field to focus
+// it, type the digits, Return selects the first search result — the direct
+// analogue of Ctrl+N on Windows, plus one extra step Windows doesn't need.
+//
+// CONFIRMED ON A REAL MAC: unlike Windows (where Ctrl+N auto-focuses the
+// composer's search field), WhatsApp for Mac's New Chat panel does NOT put
+// keyboard focus in its search field just because the panel opened — typed
+// digits landed nowhere, search field still showing its placeholder text.
+// The fix is not a hardcoded x/y click position (fragile — breaks across
+// window sizes/positions and any future WhatsApp UI change) but a position
+// computed LIVE from the accessibility tree: System Events' `click` command
+// locates and clicks a UI element wherever it actually is, the same
+// "ask the OS, don't assume" principle this file already uses for identity
+// checks (bundle ID, never window title). `entire contents` flattens the
+// whole element tree so the field is found regardless of how deeply it's
+// nested inside groups/sheets; `set focused ... to true` is tried first
+// since it's more reliable than a simulated click when supported (works
+// even mid-animation); `window 2` is a cheap fallback in case the panel
+// renders as a second window rather than a sheet on the main one. Every
+// step here is wrapped in `try` and never throws — if the field can't be
+// found, the existing blind-keystroke flow below still runs regardless,
+// matching this file's "a failed UI-scripting probe must never block a
+// send" rule elsewhere (frontmostApp, isForegroundWhatsApp).
+//
+// Same trade-off as Windows otherwise: there is no way to confirm WHICH
+// contact this opened, only whether the resulting composer accepts a paste
 // (verifyComposer, below).
 async function openChatByNumber(digits) {
   await ensureForeground();
@@ -282,6 +305,47 @@ async function openChatByNumber(digits) {
     keystrokeScript(`
   keystroke "n" using command down
   delay ${TIMINGS.afterNewChat / 1000}
+  -- Whole block wrapped in one outer try: if ANYTHING here throws (a
+  -- window that doesn't exist, an unsupported property, a timing race),
+  -- the digit-typing/Enter sequence below must still run — a failed
+  -- click-to-focus attempt must degrade to the old blind-keystroke
+  -- behaviour, never abort the whole function.
+  try
+    tell (first process whose bundle identifier is "${WHATSAPP_BUNDLE_ID}")
+      set candidateWindows to {}
+      try
+        set end of candidateWindows to window 1
+      end try
+      try
+        set end of candidateWindows to window 2
+      end try
+      set targetField to missing value
+      repeat with w in candidateWindows
+        if targetField is missing value then
+          try
+            set allEls to entire contents of w
+            repeat with el in allEls
+              try
+                if class of el is text field then
+                  set targetField to el
+                  exit repeat
+                end if
+              end try
+            end repeat
+          end try
+        end if
+      end repeat
+      if targetField is not missing value then
+        try
+          set focused of targetField to true
+        end try
+        try
+          click targetField
+        end try
+      end if
+    end tell
+  end try
+  delay ${TIMINGS.afterSearchFieldFocus / 1000}
   keystroke "${asQuote(digits)}"
   delay ${TIMINGS.afterDigits / 1000}
   key code 36
