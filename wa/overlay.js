@@ -17,6 +17,20 @@ const path = require("path");
 // — a clickable control here would itself be a focus-stealing hazard, for
 // a feature (Abort) that already exists in the browser.
 //
+// REGRESSION FIXED: `show: true` at construction time (the original form of
+// this file) activates the WHOLE Electron app on macOS the instant the
+// window appears — not just this window. Confirmed on a real Mac: the
+// Blaster snapped back in front of WhatsApp microseconds after
+// wa/sender.js's desktop.focus() had just put WhatsApp in front, because
+// overlay.start() runs immediately after. `focusable: false` alone does not
+// prevent this — activation happens at the app level before Electron gets a
+// chance to honor per-window focusability. The fix is `show: false` at
+// construction + `showInactive()` (Electron's documented "show without
+// activating" API) once the window is ready, plus `type: "panel"` on
+// darwin, which is the platform's actual non-activating floating-window
+// primitive. `focusable: false` stays for the same never-steal-focus
+// guarantee it always provided.
+//
 // Only usable inside the Electron main process (require("electron") throws
 // in plain `node server.js`), and only after app.whenReady() — both are
 // true in practice, since wa/sender.js's runCampaign() (the only caller of
@@ -65,7 +79,15 @@ function start() {
       alwaysOnTop: true,
       skipTaskbar: true,
       hasShadow: false,
-      show: true,
+      // Never true at construction — see the file-level note above. Revealed
+      // via showInactive() below, once content is actually ready to paint.
+      show: false,
+      // "panel" is macOS's real non-activating floating-window type — a
+      // window that can be visible without ever bringing its owning app
+      // forward. Object-spread so this key doesn't exist at all on
+      // Windows/Linux, where `type` takes an unrelated, platform-specific
+      // set of values.
+      ...(process.platform === "darwin" ? { type: "panel" } : {}),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -81,6 +103,14 @@ function start() {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
 
+    // showInactive(), not show() — reveals the window without activating
+    // the app, which show()/`show: true` both do. Waiting for
+    // 'ready-to-show' also removes the blank-white-frame flash that
+    // revealing before first paint would otherwise cause.
+    win.once("ready-to-show", () => {
+      if (!win || win.isDestroyed()) return;
+      win.showInactive();
+    });
     win.loadFile(path.join(__dirname, "..", "public", "overlay.html"));
     win.on("closed", () => {
       win = null;
