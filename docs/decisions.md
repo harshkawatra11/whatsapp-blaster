@@ -304,6 +304,22 @@ the old PowerShell overlay to have caused, since it was a wholly separate proces
 this was the design intent from the original macOS-port plan and was simply dropped during
 implementation.
 
+**First real macOS-specific automation bug found via live testing: the New Chat search field
+doesn't auto-focus.** On Windows, `Ctrl+N` opens WhatsApp Desktop's New Chat panel with its
+search field already focused — typing digits immediately after works. Confirmed on a real Mac
+that WhatsApp for Mac's equivalent panel does **not** do this: the panel opened correctly, but
+the search field still showed its placeholder text after digits were typed — nothing had
+keyboard focus. The fix is deliberately **not** a hardcoded x/y click position — that would
+break across window sizes, positions, multi-monitor setups, and any future WhatsApp UI change.
+Instead, `openChatByNumber()` now asks System Events to locate the search field live, via
+`entire contents of window 1` (flattens the whole accessibility tree so the field is found
+regardless of nesting depth) filtered for `class is text field`, then both `set focused ...
+to true` and `click` it before typing — the same "ask the OS what's actually there, don't
+assume" principle this file already used for identity checks (bundle ID, never window title).
+The whole block is wrapped in one outer `try`: if the field can't be found for any reason, the
+function still falls through to the old blind-keystroke behavior rather than throwing — a
+failed enhancement must never be worse than not having tried it.
+
 **Shipped unverified, deliberately, with a doctor script rather than a rewrite risk.** The
 macOS backend (`wa/desktop.mac.js`) was written entirely on a Windows machine — every
 keystroke mapping is based on published WhatsApp for Mac shortcuts (Cmd+N for New Chat, etc.,
