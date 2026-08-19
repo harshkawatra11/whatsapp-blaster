@@ -305,20 +305,38 @@ this was the design intent from the original macOS-port plan and was simply drop
 implementation.
 
 **First real macOS-specific automation bug found via live testing: the New Chat search field
-doesn't auto-focus.** On Windows, `Ctrl+N` opens WhatsApp Desktop's New Chat panel with its
-search field already focused — typing digits immediately after works. Confirmed on a real Mac
-that WhatsApp for Mac's equivalent panel does **not** do this: the panel opened correctly, but
-the search field still showed its placeholder text after digits were typed — nothing had
-keyboard focus. The fix is deliberately **not** a hardcoded x/y click position — that would
-break across window sizes, positions, multi-monitor setups, and any future WhatsApp UI change.
-Instead, `openChatByNumber()` now asks System Events to locate the search field live, via
-`entire contents of window 1` (flattens the whole accessibility tree so the field is found
-regardless of nesting depth) filtered for `class is text field`, then both `set focused ...
-to true` and `click` it before typing — the same "ask the OS what's actually there, don't
-assume" principle this file already used for identity checks (bundle ID, never window title).
-The whole block is wrapped in one outer `try`: if the field can't be found for any reason, the
-function still falls through to the old blind-keystroke behavior rather than throwing — a
-failed enhancement must never be worse than not having tried it.
+doesn't auto-focus — and it took three attempts to find a fix that actually works.** On
+Windows, `Ctrl+N` opens WhatsApp Desktop's New Chat panel with its search field already
+focused — typing digits immediately after works. Confirmed on a real Mac that WhatsApp for
+Mac's equivalent panel does **not** do this: the panel opened correctly, but the search field
+still showed its placeholder text after digits were typed — nothing had keyboard focus.
+
+Two fixes were tried and disproven by real testing before the one that works was found:
+
+1. Blind keystrokes straight after `Cmd+N` (the original, Windows-mirroring design) — didn't
+   work, per the above.
+2. Locating and clicking the search field via System Events UI scripting — `entire contents
+   of window 1` (flattens the whole accessibility tree regardless of nesting depth) filtered
+   for `class is text field`, then both `set focused ... to true` and `click` it, wrapped in
+   an outer `try` so a failed lookup degrades to plain keystrokes instead of throwing.
+   **Shipped in v1.4.2, confirmed NOT to work on a real Mac.** The most likely reason: WhatsApp
+   for Mac is a Mac Catalyst app, and Catalyst apps have a documented history of exposing
+   little or nothing meaningful to the classic AppKit accessibility tree System Events reads
+   from — there was plausibly no usable element for the query to find, so both the focus-set
+   and the click silently landed on nothing.
+3. **Pressing Tab twice** after `Cmd+N`, found by hand-testing directly on the Mac (not
+   derivable from documentation or from the accessibility tree, the same way the Windows
+   backend's hard-won timing constants were found). This works because Tab-based focus
+   movement travels the OS's real keyboard-focus chain rather than depending on the same
+   accessibility tree approach 2 couldn't read from — a focus-changing *keystroke* doesn't
+   need System Events to know an element exists, only to send it, exactly like the `Cmd+N`
+   keystroke that already worked fine. A `Down arrow` before `Return` turned out to be
+   required too — `Return` alone did not open the first search result.
+
+The lesson generalizes: for a Catalyst app, prefer keyboard-navigation keystrokes over
+accessibility-tree element lookup wherever both are possible — the former only needs System
+Events to relay a key event, the latter needs the target app to actually expose its UI, which
+this one doesn't reliably do.
 
 **Shipped unverified, deliberately, with a doctor script rather than a rewrite risk.** The
 macOS backend (`wa/desktop.mac.js`) was written entirely on a Windows machine — every
