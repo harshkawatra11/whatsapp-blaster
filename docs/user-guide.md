@@ -35,25 +35,38 @@ running, the app will tell you plainly rather than fail silently.
 
 ### macOS
 
-1. Download the `.dmg` from the link you were given, open it, and drag **WhatsApp Blaster**
-   into your Applications folder.
-2. Open it from Applications (or Spotlight). macOS will refuse the first launch with **"Apple
-   could not verify... is free of malware"** — this app isn't notarized (that requires a paid
-   Apple Developer account, an ongoing cost for a small internal tool). Unlike older macOS
-   versions, **right-click → Open no longer bypasses this** on current macOS (Sequoia and
-   later). Instead:
-   - Open **System Settings → Privacy & Security**.
-   - Scroll down — you'll see "WhatsApp Blaster was blocked..." with an **Open Anyway**
-     button. Click it, then confirm in the dialog that appears.
-3. On first real use, the app will show a banner asking for **Accessibility** permission —
-   click **Grant access**, then in the System Settings pane that opens, enable the toggle
-   next to WhatsApp Blaster. This is required: without it, macOS blocks the app from typing
-   into WhatsApp at all, and it cannot send a single message. (If you're running it via
-   `npm run electron` in development instead of the packaged app, grant permission to your
-   Terminal app instead — that's who's actually doing the typing in that case.)
-4. **This permission gets revoked by every app update** (a side effect of shipping unsigned —
-   see `docs/decisions.md` if you're curious why). You'll need to re-grant it after installing
-   a new version; the app will show the same banner again if so.
+1. Download the `.dmg` from the link you were given and open it.
+2. **Drag WhatsApp Blaster into the Applications folder shown in the same window.** Don't try
+   to run it straight from the disk image — move it to Applications first, every time.
+3. Open **Terminal** (Spotlight → type "Terminal" → Enter) and paste this line, then press
+   Return:
+   ```
+   xattr -dr com.apple.quarantine "/Applications/WhatsApp Blaster.app"
+   ```
+   Here's why this step exists: this app isn't signed with a paid Apple developer certificate
+   ($99/year, an ongoing cost that doesn't make sense for a small internal tool), so macOS
+   marks every fresh download as "quarantined" and refuses to open it — you'll see **"Apple
+   cannot check it for malicious software"** if you try before running this command. The
+   command above removes that flag for this one app; it doesn't touch anything else on your
+   Mac or weaken any other security setting.
+   - *If you'd rather avoid Terminal:* try double-clicking the app once (it will be blocked),
+     then go to **System Settings → Privacy & Security** and look for an **Open Anyway**
+     button near the bottom. This sometimes works, but for an app like this one (not signed
+     with a paid certificate) that button is unreliable — it doesn't always appear, and when
+     it does it disappears again after about an hour. The Terminal command above always
+     works and is the recommended path.
+4. Open WhatsApp Blaster from Applications or Spotlight. On first real use, the app will show
+   a banner asking for **Accessibility** permission — click **Grant access**, then in the
+   System Settings pane that opens, enable the toggle next to WhatsApp Blaster. This is
+   required: without it, macOS blocks the app from typing into WhatsApp at all, and it cannot
+   send a single message. (If you're running it via `npm run electron` in development instead
+   of the packaged app, grant permission to your Terminal app instead — that's who's actually
+   doing the typing in that case.)
+5. **Repeat step 3 (the Terminal command) and step 4 (Accessibility) after every update.** A
+   fresh download always gets a fresh quarantine flag, and macOS revokes Accessibility
+   permission on every update too (both are side effects of shipping unsigned — see
+   `docs/decisions.md` if you're curious why). The app will show the Accessibility banner
+   again if it's needed.
 
 ## The four steps
 

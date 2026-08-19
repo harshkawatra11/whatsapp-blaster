@@ -279,7 +279,10 @@ always `null` and the card never renders.
   `app.getPath('userData')` is ever read) so it can never drift if `productName` changes in
   a future edit — this is what keeps a user's saved settings and message template intact
   across updates.
-- `build/afterPack.js` ad-hoc re-signs the packed macOS `.app` (`codesign --sign -`) after
-  electron-builder packs it — Apple Silicon refuses to launch a completely unsigned app
-  ("damaged and can't be opened"), and `identity: null` alone doesn't add even that minimal
-  signature.
+- `package.json`'s `build.mac.identity: "-"` has electron-builder ad-hoc sign the packed
+  macOS `.app` itself — Apple Silicon refuses to launch a completely unsigned app ("damaged
+  and can't be opened"), and this is the minimal signature that avoids that specific failure.
+  It does **not** make the app launch without a Gatekeeper prompt on another Mac — see
+  [decisions.md](decisions.md) for what that dialog actually means and the documented
+  workaround (`xattr -dr com.apple.quarantine`, in [user-guide.md](user-guide.md)). CI verifies
+  the signature itself is well-formed (`codesign --verify --strict`) as part of `build-macos`.

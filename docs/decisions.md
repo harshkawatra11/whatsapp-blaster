@@ -266,11 +266,43 @@ platform-inherent, not a shortcut.
 
 A second, related wall hit during research: even *distributing* a signed-enough app to launch
 at all needs *some* signature on Apple Silicon (`identity: null` alone still gets "app is
-damaged" on M-series Macs) — solved for free with an ad-hoc `codesign --sign -` in
-`build/afterPack.js`, which is enough to launch but never enough to satisfy Squirrel.Mac, TCC
-permission persistence across updates, or Gatekeeper's post-Sequoia removal of the
-right-click → Open bypass (users now go through System Settings → Privacy & Security → Open
-Anyway instead — see [user-guide.md](user-guide.md)).
+damaged" on M-series Macs) — solved for free with an ad-hoc signature (`mac.identity: "-"`
+in `package.json`, which tells electron-builder to sign the whole app bundle correctly,
+inside-out, itself). **v1.4.0 shipped this via a hand-rolled `codesign --force --deep --sign -`
+in `build/afterPack.js` instead** — `--deep` is Apple's own deprecated, sign-from-the-outside-in
+flag, which can miss or mis-order the nested Frameworks/Helper app signatures electron-builder
+signs correctly when it owns the whole process. Switched to `identity: "-"` in v1.4.1 and
+deleted the manual script; CI now runs `codesign --verify --strict` on the packed `.app` so a
+malformed signature fails loudly in CI instead of shipping.
+
+**None of this removes the Gatekeeper dialog — nothing free does.** The exact wording an
+operator sees on first launch — *"Apple cannot check it for malicious software" / "This
+software needs to be updated. Contact the developer for more information."* — is the
+documented signature of an **ad-hoc-signed app running on a Mac that didn't build it**; ad-hoc
+signing exists so software can run on the machine that produced it, not for distribution.
+The only real fix is Developer ID signing + notarization, i.e. the $99/yr this whole feature
+set is built around avoiding. **`xattr -dr com.apple.quarantine` on the installed `.app` is
+the documented workaround** (removes the flag Gatekeeper's check is keyed on) and is what
+`docs/user-guide.md` now leads with — the alternative, System Settings → Privacy & Security →
+Open Anyway, is real but was demoted to a footnote: it's specifically unreliable for
+ad-hoc-signed apps (the button doesn't always appear, and expires roughly an hour after the
+blocked launch attempt when it does), which is plausibly why an install got stuck on it during
+testing. `build/dmg-readme.txt` puts the same instructions directly in the `.dmg` window, and
+the CI-generated GitHub release notes carry them too — the goal is that the fix is visible at
+the exact moment someone hits the blocked-launch dialog, not buried in a docs folder.
+
+**Focus-stealing regression, fixed in the same v1.4.1 pass.** The v1.3.0 overlay rewrite
+(`wa/overlay.js`, a cross-platform Electron `BrowserWindow` replacing the old PowerShell
+WinForms window) constructed with `show: true`. On macOS, showing *any* window activates the
+*whole owning app* — so the instant `wa/sender.js`'s `overlay.start()` ran (right after
+`desktop.focus()` had just brought WhatsApp forward), the Blaster snapped back in front of it.
+`focusable: false` never prevented this; app-level activation happens before Electron gets to
+honor a window's own focusability. Confirmed on a real Mac, and structurally impossible for
+the old PowerShell overlay to have caused, since it was a wholly separate process. Fixed with
+`show: false` + `showInactive()` (Electron's actual "reveal without activating" API) plus
+`type: "panel"` on darwin, the platform's real non-activating floating-window primitive —
+this was the design intent from the original macOS-port plan and was simply dropped during
+implementation.
 
 **Shipped unverified, deliberately, with a doctor script rather than a rewrite risk.** The
 macOS backend (`wa/desktop.mac.js`) was written entirely on a Windows machine — every
