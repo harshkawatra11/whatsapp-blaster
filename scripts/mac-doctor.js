@@ -94,7 +94,7 @@ async function main() {
   await desktop.focus();
   await confirm("  Did WhatsApp come to the foreground?");
 
-  console.log("\nStep 2: openChatByNumber() — Cmd+N, type digits, Return");
+  console.log("\nStep 2: openChatByNumber() — Cmd+N, Tab x2, type digits, Down arrow, Return");
   await desktop.openChatByNumber(digits);
   const chatOpened = await confirm("  Did the correct chat open?");
   if (!chatOpened) {

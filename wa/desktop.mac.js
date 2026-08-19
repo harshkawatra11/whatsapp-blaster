@@ -32,10 +32,11 @@ const BLASTER_BUNDLE_ID = "org.whatsappblaster.app";
 // inlined, so `mac:doctor` output can be pasted straight over this block.
 const TIMINGS = {
   afterActivate: 400, // before checking frontmost after `activate`
-  afterNewChat: 900, // after Cmd+N, before locating/clicking the search field
-  afterSearchFieldFocus: 200, // after focusing/clicking the search field, before typing digits
-  afterDigits: 2500, // after typing digits, before Enter (search settle)
-  afterChatOpen: 1500, // after Enter selects the chat
+  afterNewChat: 900, // after Cmd+N, before the two Tab presses that focus the search field
+  afterTab: 200, // after both Tab presses, before typing digits
+  afterDigits: 2500, // after typing digits, before the Down arrow (search settle)
+  afterArrowDown: 300, // after Down arrow selects the first result, before Enter
+  afterChatOpen: 1500, // after Enter opens the chat
   afterSelectAll: 150,
   afterDelete: 200,
   afterClipboardSet: 300,
@@ -272,29 +273,32 @@ function keystrokeScript(lines) {
   return `tell application "System Events"\n${lines}\nend tell`;
 }
 
-// Opens a chat by number: Cmd+N (New Chat), CLICK the search field to focus
-// it, type the digits, Return selects the first search result — the direct
-// analogue of Ctrl+N on Windows, plus one extra step Windows doesn't need.
+// Opens a chat by number: Cmd+N (New Chat), Tab twice to move keyboard focus
+// into the search field, type the digits, Down arrow to select the first
+// result, Return to open it — more steps than Windows' Ctrl+N/digits/Enter,
+// because WhatsApp for Mac needs them all.
 //
-// CONFIRMED ON A REAL MAC: unlike Windows (where Ctrl+N auto-focuses the
-// composer's search field), WhatsApp for Mac's New Chat panel does NOT put
-// keyboard focus in its search field just because the panel opened — typed
-// digits landed nowhere, search field still showing its placeholder text.
-// The fix is not a hardcoded x/y click position (fragile — breaks across
-// window sizes/positions and any future WhatsApp UI change) but a position
-// computed LIVE from the accessibility tree: System Events' `click` command
-// locates and clicks a UI element wherever it actually is, the same
-// "ask the OS, don't assume" principle this file already uses for identity
-// checks (bundle ID, never window title). `entire contents` flattens the
-// whole element tree so the field is found regardless of how deeply it's
-// nested inside groups/sheets; `set focused ... to true` is tried first
-// since it's more reliable than a simulated click when supported (works
-// even mid-animation); `window 2` is a cheap fallback in case the panel
-// renders as a second window rather than a sheet on the main one. Every
-// step here is wrapped in `try` and never throws — if the field can't be
-// found, the existing blind-keystroke flow below still runs regardless,
-// matching this file's "a failed UI-scripting probe must never block a
-// send" rule elsewhere (frontmostApp, isForegroundWhatsApp).
+// CONFIRMED ON A REAL MAC, the hard way — two earlier approaches both
+// failed before this one was found by hand-testing on the device itself:
+//   1. Blind keystrokes straight after Cmd+N (the original, Windows-mirroring
+//      design) — didn't work. Unlike Windows, WhatsApp for Mac's New Chat
+//      panel does NOT put keyboard focus in its search field just because
+//      the panel opened; typed digits landed nowhere.
+//   2. Locating and clicking the search field via System Events' UI
+//      scripting (`entire contents` of the window, filtered for `class is
+//      text field`) — ALSO didn't work. WhatsApp for Mac is a Mac Catalyst
+//      app, and Catalyst apps have a documented history of exposing little
+//      or nothing meaningful to the classic AppKit accessibility tree
+//      System Events reads from — there was plausibly no usable element for
+//      that query to find, so the click silently landed on nothing.
+//   3. **Tab twice** — works, because Tab-based focus movement travels the
+//      OS's real keyboard-focus chain rather than depending on the same
+//      accessibility tree that approach 2 couldn't read from. This is why
+//      it succeeds where element lookup doesn't: focus KEYS don't need
+//      System Events to know an element exists, only to send a keystroke —
+//      exactly like the blind Cmd+N keystroke that already worked fine.
+//   Down arrow before Return is also required — Return alone did not open
+//   the first search result.
 //
 // Same trade-off as Windows otherwise: there is no way to confirm WHICH
 // contact this opened, only whether the resulting composer accepts a paste
@@ -305,49 +309,13 @@ async function openChatByNumber(digits) {
     keystrokeScript(`
   keystroke "n" using command down
   delay ${TIMINGS.afterNewChat / 1000}
-  -- Whole block wrapped in one outer try: if ANYTHING here throws (a
-  -- window that doesn't exist, an unsupported property, a timing race),
-  -- the digit-typing/Enter sequence below must still run — a failed
-  -- click-to-focus attempt must degrade to the old blind-keystroke
-  -- behaviour, never abort the whole function.
-  try
-    tell (first process whose bundle identifier is "${WHATSAPP_BUNDLE_ID}")
-      set candidateWindows to {}
-      try
-        set end of candidateWindows to window 1
-      end try
-      try
-        set end of candidateWindows to window 2
-      end try
-      set targetField to missing value
-      repeat with w in candidateWindows
-        if targetField is missing value then
-          try
-            set allEls to entire contents of w
-            repeat with el in allEls
-              try
-                if class of el is text field then
-                  set targetField to el
-                  exit repeat
-                end if
-              end try
-            end repeat
-          end try
-        end if
-      end repeat
-      if targetField is not missing value then
-        try
-          set focused of targetField to true
-        end try
-        try
-          click targetField
-        end try
-      end if
-    end tell
-  end try
-  delay ${TIMINGS.afterSearchFieldFocus / 1000}
+  key code 48
+  key code 48
+  delay ${TIMINGS.afterTab / 1000}
   keystroke "${asQuote(digits)}"
   delay ${TIMINGS.afterDigits / 1000}
+  key code 125
+  delay ${TIMINGS.afterArrowDown / 1000}
   key code 36
   delay ${TIMINGS.afterChatOpen / 1000}
 `)

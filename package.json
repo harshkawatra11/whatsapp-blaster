@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-blaster",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": true,
   "description": "Bulk WhatsApp invite automation, driving WhatsApp Desktop directly",
   "main": "main.js",
