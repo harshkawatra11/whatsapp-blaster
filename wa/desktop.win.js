@@ -114,6 +114,12 @@ $sig = @'
 // an app like Chrome that holds the foreground lock.
 [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+// Used by Get-WhatsAppWindowHandle to walk the real Z-order of top-level
+// windows, instead of trusting .NET's Process.MainWindowHandle — see that
+// function's comment for why MainWindowHandle is not reliable enough here.
+[DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
 '@
 Add-Type -MemberDefinition $sig -Name Win32 -Namespace WAB
 
@@ -126,6 +132,36 @@ function Get-ForegroundTitle {
 
 function Get-WhatsAppProcessIds {
   return (Get-Process | Where-Object { $_.Name -like "${WHATSAPP_PROCESS_FILTER}" }).Id
+}
+
+# Finds WhatsApp's real top-level window by walking the actual on-screen
+# Z-order (GetTopWindow + GetWindow(GW_HWNDNEXT), matching each window's
+# owning PID against Get-WhatsAppProcessIds) — NOT by trusting .NET's
+# Process.MainWindowHandle, which this file used to rely on and which
+# reproducibly comes back 0 for WhatsApp on some machines: confirmed
+# directly (both in this app's own testing and reported from a teammate's
+# separate laptop) that WhatsApp can be genuinely running with a real,
+# visible window while MainWindowHandle still reports zero — a known
+# unreliability for packaged/Store-style apps and for windows that are
+# minimised or still settling right after launch. Walking the Z-order and
+# checking IsWindowVisible (true for minimised windows — ShowWindow's
+# SW_RESTORE in Set-ForegroundReliable handles un-minimising once a real
+# handle is found) finds exactly what a human clicking through Alt-Tab
+# would see, so it can't miss a window that MainWindowHandle fails to
+# report.
+function Get-WhatsAppWindowHandle {
+  $waIds = @(Get-WhatsAppProcessIds)
+  if ($waIds.Count -eq 0) { return [IntPtr]::Zero }
+  $hwnd = [WAB.Win32]::GetTopWindow([IntPtr]::Zero)
+  while ($hwnd -ne [IntPtr]::Zero) {
+    if ([WAB.Win32]::IsWindowVisible($hwnd)) {
+      $ownerPid = 0
+      [WAB.Win32]::GetWindowThreadProcessId($hwnd, [ref]$ownerPid) | Out-Null
+      if ($waIds -contains $ownerPid) { return $hwnd }
+    }
+    $hwnd = [WAB.Win32]::GetWindow($hwnd, 2)   # GW_HWNDNEXT
+  }
+  return [IntPtr]::Zero
 }
 
 function Test-ForegroundIsWhatsApp {
@@ -167,29 +203,39 @@ async function isRunning() {
   return out.trim().length > 0;
 }
 
-// Brings WhatsApp Desktop to the foreground, maximised. Retries the
-// AttachThreadInput activation a few times (a single attempt can lose a race
-// with whatever currently owns focus), then verifies by OWNING PROCESS
-// before returning. Throws if the process isn't running or focus was never
-// actually won — callers must not proceed to type on a guess.
+// Brings WhatsApp Desktop to the foreground, maximised. Retries the window
+// lookup AND the AttachThreadInput activation together, up to 3 times — a
+// single attempt can lose a race with whatever currently owns focus, or
+// catch WhatsApp's window mid-initialisation right after launch — then
+// verifies by OWNING PROCESS before returning. Throws if the process isn't
+// running or focus was never actually won — callers must not proceed to
+// type on a guess.
 async function focus() {
   const script = `${PS_PREAMBLE}
-$p = Get-Process | Where-Object { $_.Name -like "${WHATSAPP_PROCESS_FILTER}" -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-if (-not $p) { Write-Output "NO_WINDOW"; exit }
+if ((@(Get-WhatsAppProcessIds)).Count -eq 0) { Write-Output "NOT_RUNNING"; exit }
 $ok = $false
+$hwnd = [IntPtr]::Zero
 for ($i = 0; $i -lt 3; $i++) {
-  Set-ForegroundReliable $p.MainWindowHandle
+  $hwnd = Get-WhatsAppWindowHandle
+  if ($hwnd -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 400; continue }
+  Set-ForegroundReliable $hwnd
   Start-Sleep -Milliseconds 400
   if (Test-ForegroundIsWhatsApp) { $ok = $true; break }
   Start-Sleep -Milliseconds 400
 }
-if (-not $ok) { Write-Output ("FAILED:" + (Get-ForegroundTitle)); exit }
+if (-not $ok) {
+  $seen = if ($hwnd -eq [IntPtr]::Zero) { "no window found" } else { Get-ForegroundTitle }
+  Write-Output ("FAILED:" + $seen)
+  exit
+}
 Write-Output (Get-ForegroundTitle)
 `;
   const result = await runPowerShell(script);
-  if (result === "NO_WINDOW" || result.startsWith("FAILED:")) {
-    const seen = result.startsWith("FAILED:") ? result.slice(7) : result;
-    throw new Error(`WhatsApp Desktop did not come to the foreground (saw "${seen}")`);
+  if (result === "NOT_RUNNING") {
+    throw new Error("WhatsApp Desktop is not running");
+  }
+  if (result.startsWith("FAILED:")) {
+    throw new Error(`WhatsApp Desktop did not come to the foreground (saw "${result.slice(7)}")`);
   }
   return result;
 }
