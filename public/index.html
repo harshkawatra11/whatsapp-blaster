@@ -320,9 +320,15 @@
       it fills in automatically per person. No <code>{{ }}</code> typing needed.
     </p>
     <div class="chip-row">
-      <button type="button" class="chip" onclick="insertChip('name')">+ Name</button>
       <button type="button" class="chip" onclick="insertChip('sno')">+ S.No.</button>
+      <button type="button" class="chip" onclick="insertChip('name')">+ Name</button>
       <button type="button" class="chip" onclick="insertChip('phone')">+ Phone</button>
+      <button type="button" class="chip" onclick="insertChip('portfolio')">+ Portfolio</button>
+      <button type="button" class="chip" onclick="insertChip('committee')">+ Committee</button>
+      <button type="button" class="chip" onclick="insertChip('eventName')">+ Event Name</button>
+      <button type="button" class="chip" onclick="insertChip('hostSchoolName')">+ Host School Name</button>
+      <button type="button" class="chip" onclick="insertChip('date')">+ Date</button>
+      <button type="button" class="chip" onclick="insertChip('venue')">+ Venue</button>
     </div>
     <textarea id="tplText" rows="9" oninput="renderTplPreview()"></textarea>
     <div id="tplWarn" class="tpl-warn hidden"></div>
@@ -616,7 +622,17 @@ async function saveSettingsForm() {
 }
 
 // ── message template ─────────────────────────────────────────────────────
-const TPL_SAMPLE_ROW = { sno: 1, name: 'Priya Sharma', phone: '9876543210' };
+const TPL_SAMPLE_ROW = {
+  sno: 1,
+  name: 'Priya Sharma',
+  phone: '9876543210',
+  portfolio: 'Delegate',
+  committee: 'UNSC',
+  eventName: 'MUN 2026',
+  hostSchoolName: 'Example School',
+  date: '12 Sept 2026',
+  venue: 'Main Auditorium',
+};
 
 // Mirrors template.js's fillTemplate() exactly, so the preview shown here
 // matches what actually gets sent — kept in sync deliberately since this

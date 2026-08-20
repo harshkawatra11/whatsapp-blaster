@@ -15,6 +15,12 @@ function rowToCamel(r) {
     state: r.state,
     error: r.error,
     sentAt: r.sent_at,
+    portfolio: r.portfolio,
+    committee: r.committee,
+    eventName: r.event_name,
+    hostSchoolName: r.host_school_name,
+    date: r.date,
+    venue: r.venue,
   };
 }
 
@@ -35,11 +41,26 @@ async function createCampaignWithRecipients({ senderPhone, fileName, rows }) {
 
     if (rows.length > 0) {
       const insert = db.prepare(
-        `INSERT INTO recipients (campaign_id, sno, name, phone, state, error)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO recipients
+           (campaign_id, sno, name, phone, state, error,
+            portfolio, committee, event_name, host_school_name, date, venue)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const r of rows) {
-        insert.run(id, r.sno, r.name, r.phone, r.state || "pending", r.error || null);
+        insert.run(
+          id,
+          r.sno,
+          r.name,
+          r.phone,
+          r.state || "pending",
+          r.error || null,
+          r.portfolio || null,
+          r.committee || null,
+          r.eventName || null,
+          r.hostSchoolName || null,
+          r.date || null,
+          r.venue || null
+        );
       }
     }
     db.exec("COMMIT");

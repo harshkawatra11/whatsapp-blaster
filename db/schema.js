@@ -75,6 +75,17 @@ function ensureSchema() {
   // unused columns, harmless) since dropping a column is a needless risk
   // for zero benefit — see the additive-only migration philosophy this
   // function follows.
+
+  // Six new optional per-recipient template fields (v1.5.2) — same additive
+  // pattern, nullable TEXT like name/phone, so existing installs upgrade
+  // without any data loss or "no such column" errors.
+  migrateAddColumnIfMissing("recipients", "portfolio", "TEXT");
+  migrateAddColumnIfMissing("recipients", "committee", "TEXT");
+  migrateAddColumnIfMissing("recipients", "event_name", "TEXT");
+  migrateAddColumnIfMissing("recipients", "host_school_name", "TEXT");
+  migrateAddColumnIfMissing("recipients", "date", "TEXT");
+  migrateAddColumnIfMissing("recipients", "venue", "TEXT");
+
   console.log("   Schema ready (wa_sessions, campaigns, recipients, settings).");
 }
 

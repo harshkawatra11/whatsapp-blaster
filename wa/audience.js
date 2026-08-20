@@ -1,5 +1,16 @@
 const NAME_ALIASES = ["name", "full name", "participant", "student", "participant name"];
 const PHONE_ALIASES = ["phone", "mobile", "number", "contact", "whatsapp", "phone number", "mobile number"];
+
+// Optional per-row template fields, unlike name/phone above — a CSV missing
+// any of these simply leaves that field blank for every recipient (the
+// template's {{token}} is left literal, per fillTemplate's existing
+// pass-through for unresolved keys), rather than failing the whole upload.
+const PORTFOLIO_ALIASES = ["portfolio"];
+const COMMITTEE_ALIASES = ["committee"];
+const EVENT_NAME_ALIASES = ["event name", "event"];
+const HOST_SCHOOL_ALIASES = ["host school name", "host school", "school name", "school"];
+const DATE_ALIASES = ["date", "event date"];
+const VENUE_ALIASES = ["venue", "location"];
 // Deliberately no per-row poster column support — removed after a real
 // incident: a stale POSTER LINK column in an event's CSV silently
 // overrode the poster set on the starter screen, per row, with no
@@ -96,21 +107,37 @@ function buildAudience(csvText, defaultCountry) {
       `Could not find name/phone columns. Headers found: ${headers.join(", ") || "(none)"}`
     );
   }
+  const portfolioIdx = findColumn(headers, PORTFOLIO_ALIASES);
+  const committeeIdx = findColumn(headers, COMMITTEE_ALIASES);
+  const eventNameIdx = findColumn(headers, EVENT_NAME_ALIASES);
+  const hostSchoolNameIdx = findColumn(headers, HOST_SCHOOL_ALIASES);
+  const dateIdx = findColumn(headers, DATE_ALIASES);
+  const venueIdx = findColumn(headers, VENUE_ALIASES);
+  const cell = (cells, idx) => (idx === -1 ? null : (cells[idx] || "").trim() || null);
+
   const seen = new Set();
   return dataRows.map((cells, i) => {
     const sno = i + 1;
     const name = (cells[nameIdx] || "").trim();
     const rawPhone = cells[phoneIdx] || "";
     const phone = normalizePhone(rawPhone, defaultCountry);
+    const extra = {
+      portfolio: cell(cells, portfolioIdx),
+      committee: cell(cells, committeeIdx),
+      eventName: cell(cells, eventNameIdx),
+      hostSchoolName: cell(cells, hostSchoolNameIdx),
+      date: cell(cells, dateIdx),
+      venue: cell(cells, venueIdx),
+    };
 
     if (!phone) {
-      return { sno, name, phone: null, state: "skipped", error: "invalid phone number" };
+      return { sno, name, phone: null, state: "skipped", error: "invalid phone number", ...extra };
     }
     if (seen.has(phone)) {
-      return { sno, name, phone, state: "skipped", error: "duplicate phone number in this file" };
+      return { sno, name, phone, state: "skipped", error: "duplicate phone number in this file", ...extra };
     }
     seen.add(phone);
-    return { sno, name, phone, state: "pending", error: null };
+    return { sno, name, phone, state: "pending", error: null, ...extra };
   });
 }
 
