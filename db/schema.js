@@ -37,9 +37,6 @@ CREATE TABLE IF NOT EXISTS recipients (
   state TEXT NOT NULL DEFAULT 'pending',
   error TEXT,
   sent_at INTEGER,
-  -- Per-row overrides of the event-level poster/brochure settings, present
-  -- only when the CSV had a POSTER LINK / ATTACHMENT LINK column. Added via
-  -- a guarded ALTER TABLE below, not here — see migrateAddColumnIfMissing.
   UNIQUE(campaign_id, sno)
 );
 
@@ -70,8 +67,14 @@ function migrateAddColumnIfMissing(table, column, definition) {
 
 function ensureSchema() {
   db.exec(DDL);
-  migrateAddColumnIfMissing("recipients", "poster_link", "TEXT");
-  migrateAddColumnIfMissing("recipients", "brochure_link", "TEXT");
+  // poster_link and brochure_link are no longer written or read by the app
+  // (per-row CSV posters and the whole brochure feature were both removed —
+  // see docs/decisions.md) — their migration calls were removed too, so a
+  // fresh install never creates either column at all. An existing install's
+  // database still has whichever of them it already migrated in (stray
+  // unused columns, harmless) since dropping a column is a needless risk
+  // for zero benefit — see the additive-only migration philosophy this
+  // function follows.
   console.log("   Schema ready (wa_sessions, campaigns, recipients, settings).");
 }
 

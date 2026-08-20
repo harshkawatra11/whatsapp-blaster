@@ -1,13 +1,11 @@
 const NAME_ALIASES = ["name", "full name", "participant", "student", "participant name"];
 const PHONE_ALIASES = ["phone", "mobile", "number", "contact", "whatsapp", "phone number", "mobile number"];
-// Both optional — a CSV without these columns behaves exactly as before
-// (posterLink/brochureLink stay null on every row, no image is attached,
-// no brochure line is appended). "attachment" is the primary alias for
-// the brochure link because that's the actual column header the org's own
-// event CSVs use (POSTER LINK / ATTACHMENT LINK) — the column holds a
-// brochure/form link despite the header saying "attachment".
-const POSTER_ALIASES = ["poster link", "poster", "poster url", "image link"];
-const BROCHURE_ALIASES = ["attachment link", "attachment", "brochure link", "brochure", "brochure url"];
+// Deliberately no per-row poster column support — removed after a real
+// incident: a stale POSTER LINK column in an event's CSV silently
+// overrode the poster set on the starter screen, per row, with no
+// indication in the UI, so an uploaded image never actually got sent. The
+// poster now comes from exactly one place (Settings) — see
+// wa/sender.js's effectivePoster() and docs/decisions.md.
 
 // Minimal RFC-4180 parser: quoted fields, embedded commas/newlines, CRLF or
 // LF line endings, doubled-quote escaping. No dependency needed for this.
@@ -98,28 +96,21 @@ function buildAudience(csvText, defaultCountry) {
       `Could not find name/phone columns. Headers found: ${headers.join(", ") || "(none)"}`
     );
   }
-  // Unlike name/phone, these are optional — findColumn returning -1 just
-  // means every row's posterLink/brochureLink stays null below.
-  const posterIdx = findColumn(headers, POSTER_ALIASES);
-  const brochureIdx = findColumn(headers, BROCHURE_ALIASES);
-
   const seen = new Set();
   return dataRows.map((cells, i) => {
     const sno = i + 1;
     const name = (cells[nameIdx] || "").trim();
     const rawPhone = cells[phoneIdx] || "";
     const phone = normalizePhone(rawPhone, defaultCountry);
-    const posterLink = posterIdx !== -1 ? (cells[posterIdx] || "").trim() || null : null;
-    const brochureLink = brochureIdx !== -1 ? (cells[brochureIdx] || "").trim() || null : null;
 
     if (!phone) {
-      return { sno, name, phone: null, state: "skipped", error: "invalid phone number", posterLink, brochureLink };
+      return { sno, name, phone: null, state: "skipped", error: "invalid phone number" };
     }
     if (seen.has(phone)) {
-      return { sno, name, phone, state: "skipped", error: "duplicate phone number in this file", posterLink, brochureLink };
+      return { sno, name, phone, state: "skipped", error: "duplicate phone number in this file" };
     }
     seen.add(phone);
-    return { sno, name, phone, state: "pending", error: null, posterLink, brochureLink };
+    return { sno, name, phone, state: "pending", error: null };
   });
 }
 

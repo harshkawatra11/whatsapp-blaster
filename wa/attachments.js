@@ -1,7 +1,5 @@
-// The poster is sent as a real attached image; the brochure stays a plain
-// link (it's a document, not an image). Downloads and caches the poster
-// from a public Google Drive share link, and does a cheap reachability
-// check for the brochure preflight warning.
+// The poster is sent as a real attached image. Downloads and caches it from
+// a public Google Drive share link.
 
 const fs = require("fs");
 const path = require("path");
@@ -14,7 +12,6 @@ const MAX_BYTES = 16 * 1024 * 1024; // WhatsApp's own attachment size limit
 const DOWNLOAD_TIMEOUT_MS = 30000;
 const EXT_BY_MIME = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp" };
 const memoryCache = new Map();
-const shortenCache = new Map();
 
 // Handles every share-link shape Drive actually produces:
 //   https://drive.google.com/file/d/<id>/view?usp=sharing
@@ -30,41 +27,21 @@ function extractDriveFileId(url) {
   return null;
 }
 
-// A cheap reachability check — used at preflight to WARN (never block; a
-// dead link must not stop the rest of the message from sending). Verified
-// live against a real deleted-file Drive link: a clean 404 to a HEAD
-// request, no false positive.
-async function checkLinkReachable(url) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
-  try {
-    const res = await fetch(url, { method: "HEAD", redirect: "follow", signal: controller.signal });
-    return { ok: res.ok, status: res.status };
-  } catch (e) {
-    return { ok: false, error: e.name === "AbortError" ? "timed out" : e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function findCachedFile(fileId) {
-  if (!fs.existsSync(CACHE_DIR)) return null;
-  const hit = fs.readdirSync(CACHE_DIR).find((f) => f.startsWith(`${fileId}.`));
-  return hit ? path.join(CACHE_DIR, hit) : null;
-}
-
 // Returns { ok: true, path } or { ok: false, error }. Never throws.
+//
+// Downloads fresh EVERY run — no permanent disk cache keyed by file ID
+// (removed; there used to be one). With one poster per run now
+// (effectivePoster() in wa/sender.js — no more per-recipient CSV overrides),
+// re-downloading once per campaign is cheap, and it guarantees the bytes
+// sent are always current: a permanent cache meant replacing the file at
+// the same Drive link (keeping the link, swapping the image) silently kept
+// sending the OLD bytes forever, which was part of what made a stale
+// poster look "hardwired into the app." memoryCache still dedupes repeat
+// calls within a single run (e.g. preflight + a retry).
 async function downloadDriveFile(url) {
   const fileId = extractDriveFileId(url);
   if (!fileId) return { ok: false, error: `not a recognisable Google Drive link: "${url}"` };
   if (memoryCache.has(fileId)) return memoryCache.get(fileId);
-
-  const cached = findCachedFile(fileId);
-  if (cached) {
-    const result = { ok: true, path: cached };
-    memoryCache.set(fileId, result);
-    return result;
-  }
 
   let result;
   const controller = new AbortController();
@@ -103,40 +80,8 @@ async function downloadDriveFile(url) {
   return result;
 }
 
-// Shortens a brochure link via TinyURL's key-less create endpoint — no
-// account, no auth. Never blocks a send: any failure (network, non-URL
-// response) falls back to the original link in `.url`, so a caller can
-// always just use `result.url` regardless of `.ok`.
-async function shortenUrl(url) {
-  if (shortenCache.has(url)) return shortenCache.get(url);
-
-  let result;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
-  try {
-    const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`, {
-      signal: controller.signal,
-    });
-    if (res.ok) {
-      const short = (await res.text()).trim();
-      result = short.startsWith("http")
-        ? { ok: true, url: short }
-        : { ok: false, url, error: `unexpected response: ${short.slice(0, 80)}` };
-    } else {
-      result = { ok: false, url, error: `HTTP ${res.status}` };
-    }
-  } catch (e) {
-    result = { ok: false, url, error: e.name === "AbortError" ? "timed out" : e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
-  shortenCache.set(url, result);
-  return result;
-}
-
 function clearMemoryCache() {
   memoryCache.clear();
-  shortenCache.clear();
 }
 
 // A directly-uploaded poster, as an alternative to a Drive link. Single
@@ -199,9 +144,7 @@ function deleteLocalPoster(filename) {
 }
 
 module.exports = {
-  checkLinkReachable,
   downloadDriveFile,
-  shortenUrl,
   clearMemoryCache,
   resolveLocalPoster,
   saveLocalPoster,

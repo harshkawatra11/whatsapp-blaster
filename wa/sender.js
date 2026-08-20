@@ -3,7 +3,7 @@ const overlay = require("./overlay");
 const attachments = require("./attachments");
 const campaigns = require("../db/campaigns");
 const settingsDb = require("../db/settings");
-const { buildMessageText, appendBrochureLine } = require("../template");
+const { buildMessageText } = require("../template");
 
 // Sends via WhatsApp Desktop keyboard automation (wa/desktop.js), not
 // WhatsApp Web. Cold numbers — the entire audience of this campaign — were
@@ -172,82 +172,43 @@ async function sendOne(phone, text, dryRun, posterPath) {
   }
 }
 
-// Resolves the link that actually applies to a recipient: a per-row CSV
-// value (POSTER LINK / ATTACHMENT LINK columns) overrides the event-level
-// setting, which is the fallback — not the other way round. Either can be
-// absent, in which case the row gets none.
-function effectiveLink(rowLink, settingsLink) {
-  return rowLink || settingsLink || null;
-}
-
-// Same precedence as effectiveLink, but the event-level poster can now be
-// EITHER a Drive link OR a directly-uploaded local image (mutually
-// exclusive — enforced where the setting is saved, server.js's
+// Resolves the ONE poster (if any) that applies to this whole run. There is
+// no per-row CSV override anymore — a CSV's POSTER LINK column (if present)
+// is ignored entirely, on explicit operator request, after a real incident:
+// a teammate uploaded an image on the starter screen, but a stale POSTER
+// LINK column in that event's CSV silently overrode it per-row with no
+// indication in the UI, so the wrong image went out. One setting, one
+// source of truth, removes the whole class of confusion. The setting
+// itself is EITHER a Drive link OR a directly-uploaded local image
+// (mutually exclusive — enforced where it's saved: server.js's
 // /api/settings/poster-upload clears posterLink on upload, and the UI
-// disables the link field while an upload is active). A per-row CSV value
-// is always a link (there's no per-row upload mechanism) and still wins
-// over either event-level source, matching effectiveLink's rule exactly.
-// If both event-level settings were somehow non-empty, the upload wins —
-// it's already sitting on disk with nothing to fetch.
-function effectivePoster(row, settings) {
-  if (row.posterLink) return { kind: "link", link: row.posterLink };
+// disables the link field while an upload is active). If both were somehow
+// non-empty, the upload wins — it's already sitting on disk with nothing
+// to fetch.
+function effectivePoster(settings) {
   if (settings.posterUploadFilename) return { kind: "local", filename: settings.posterUploadFilename };
   if (settings.posterLink) return { kind: "link", link: settings.posterLink };
   return null;
 }
 
-function posterKey(poster) {
-  if (!poster) return null;
-  return poster.kind === "local" ? `local:${poster.filename}` : `link:${poster.link}`;
-}
-
-// Poster is resolved ONCE per distinct source before the send loop starts
-// (a shared event-level poster means a dead link, or a deleted upload,
-// would otherwise fail identically on every recipient using it — better to
-// find that once, up front). A link is downloaded via attachments.js as
-// before; a local upload is just confirmed still present on disk (no
-// network involved). Brochure stays a link — it gets the cheap
-// reachability check plus a one-time TinyURL shortening of the raw Drive
-// share link, since the raw link is long and ugly but still autolinks fine
-// either way. Returns { posterResults, brochureResults } — posterResults is
-// Map<posterKey, result>, brochureResults is Map<originalLink, result>.
-async function preflightAttachments(recipients, settings, onEvent) {
+// Resolves the single event-level poster ONCE before the send loop starts
+// (not once per recipient — a dead link or a deleted upload fails
+// identically for everyone using it, better to find that once, up front).
+// A link is downloaded via attachments.js; a local upload is just
+// confirmed still present on disk (no network involved). Returns
+// { ok, path } / { ok:false, error }, or null when no poster is configured.
+async function preflightPoster(settings, onEvent) {
   attachments.clearMemoryCache();
-  const posters = new Map(); // posterKey -> descriptor
-  const brochureLinks = new Set();
-  for (const row of recipients) {
-    if (row.state === "skipped") continue;
-    const poster = effectivePoster(row, settings);
-    if (poster) posters.set(posterKey(poster), poster);
-    const brochure = effectiveLink(row.brochureLink, settings.brochureLink);
-    if (brochure) brochureLinks.add(brochure);
-  }
+  const poster = effectivePoster(settings);
+  if (!poster) return null;
 
-  const posterResults = new Map();
-  for (const [key, poster] of posters) {
-    const result =
-      poster.kind === "local" ? attachments.resolveLocalPoster(poster.filename) : await attachments.downloadDriveFile(poster.link);
-    posterResults.set(key, result);
-    if (!result.ok) {
-      const label = poster.kind === "local" ? "uploaded poster" : `poster image (${poster.link})`;
-      onEvent({ type: "warning", message: `${label} unavailable: ${result.error}` });
-    }
+  const result =
+    poster.kind === "local" ? attachments.resolveLocalPoster(poster.filename) : await attachments.downloadDriveFile(poster.link);
+  if (!result.ok) {
+    const label = poster.kind === "local" ? "uploaded poster" : `poster image (${poster.link})`;
+    onEvent({ type: "warning", message: `${label} unavailable: ${result.error}` });
   }
-  const brochureResults = new Map();
-  for (const link of brochureLinks) {
-    const check = await attachments.checkLinkReachable(link);
-    if (!check.ok) {
-      onEvent({
-        type: "warning",
-        message: `brochure link may be unreachable (${link}): ${check.error || `HTTP ${check.status}`} — sending will continue, the link just may not open for recipients`,
-      });
-    }
-    // Shortening failure isn't worth a loud warning — .url falls back to the
-    // original link either way, so the send is unaffected either way.
-    const short = await attachments.shortenUrl(link);
-    brochureResults.set(link, short.url);
-  }
-  return { posterResults, brochureResults };
+  return result;
 }
 
 async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborted, dryRun }) {
@@ -256,8 +217,14 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
   // them and have the very next run use the new values.
   const settings = await settingsDb.getSettings();
   let remaining = settings.dailyCap - (await campaigns.countRecentSends(senderId));
-  const { posterResults, brochureResults } = await preflightAttachments(recipients, settings, onEvent);
 
+  // focus() now runs BEFORE any network I/O (poster preflight, below) —
+  // previously preflight ran first, so pressing Send Invites could sit for
+  // many seconds (up to a 30s download timeout) with WhatsApp never coming
+  // to the foreground and the app looking frozen. Bringing WhatsApp up
+  // first means the operator sees something happen immediately, and the
+  // overlay (started right after) explains the poster-download pause
+  // instead of leaving a dead-looking window.
   try {
     await desktop.focus();
   } catch (e) {
@@ -286,11 +253,18 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
     remaining: total - tally.submitted - tally.unknown - tally.skipped - tally.rehearsed,
   });
   overlay.start();
+  overlay.update({ status: "preparing poster…" });
 
   let stoppedEarly = false;
   let stopReason = null;
 
   try {
+    // Poster preflight moved here, inside the try/finally that owns
+    // overlay.stop() + the clipboard restore — it now runs AFTER focus()
+    // and overlay.start(), so a slow or dead Drive link shows as a live
+    // "preparing poster…" status instead of a silent pre-focus stall.
+    const posterResult = await preflightPoster(settings, onEvent);
+
     for (const row of recipients) {
       const base = { sno: row.sno, name: row.name, phone: row.phone };
 
@@ -322,18 +296,13 @@ async function runCampaign({ senderId, campaignId, recipients, onEvent, isAborte
       attempts++;
       overlay.update({ counts: overlayCounts(), current: `${row.name || "?"} (${row.phone})`, status: "sending..." });
 
-      const poster = effectivePoster(row, settings);
-      const brochureLink = effectiveLink(row.brochureLink, settings.brochureLink);
-      let text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
-      text = appendBrochureLine(text, brochureLink ? brochureResults.get(brochureLink) : null);
+      const text = buildMessageText(row, settings.messageTemplate, settings.nameFallback);
 
       let result;
-      const posterResult = poster ? posterResults.get(posterKey(poster)) : null;
-      if (poster && !posterResult?.ok) {
+      if (posterResult && !posterResult.ok) {
         // Already logged loudly once at preflight — don't retry the same
         // resolution per recipient, just report the consequence.
-        const label = poster.kind === "local" ? "uploaded poster" : "poster image";
-        result = { outcome: "error", error: `${label} unavailable: ${posterResult?.error || "unavailable"}` };
+        result = { outcome: "error", error: `poster unavailable: ${posterResult.error || "unavailable"}` };
       } else {
         result = await sendOne(row.phone, text, dryRun, posterResult?.path);
       }

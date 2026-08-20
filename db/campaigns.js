@@ -15,8 +15,6 @@ function rowToCamel(r) {
     state: r.state,
     error: r.error,
     sentAt: r.sent_at,
-    posterLink: r.poster_link,
-    brochureLink: r.brochure_link,
   };
 }
 
@@ -37,11 +35,11 @@ async function createCampaignWithRecipients({ senderPhone, fileName, rows }) {
 
     if (rows.length > 0) {
       const insert = db.prepare(
-        `INSERT INTO recipients (campaign_id, sno, name, phone, state, error, poster_link, brochure_link)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO recipients (campaign_id, sno, name, phone, state, error)
+         VALUES (?, ?, ?, ?, ?, ?)`
       );
       for (const r of rows) {
-        insert.run(id, r.sno, r.name, r.phone, r.state || "pending", r.error || null, r.posterLink || null, r.brochureLink || null);
+        insert.run(id, r.sno, r.name, r.phone, r.state || "pending", r.error || null);
       }
     }
     db.exec("COMMIT");

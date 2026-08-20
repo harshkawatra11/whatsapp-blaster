@@ -441,6 +441,10 @@ app.post("/api/campaigns/:id/abort", (req, res) => {
 function startServer() {
   ensureSchema();
   settingsDb.seedTemplateIfMissing();
+  // v1.5.0 one-time cleanup — see db/settings.js's clearStalePosterOnce for
+  // why: every install's saved poster is cleared exactly once so nobody
+  // keeps sending an image left over from the per-row CSV override bug.
+  settingsDb.clearStalePosterOnce(attachments.deleteLocalPoster);
   return new Promise((resolve, reject) => {
     const server = app.listen(config.port, "127.0.0.1", () => resolve(server));
     server.on("error", reject);

@@ -25,14 +25,13 @@ const DEFAULTS = {
   defaultCountry: "91",
   messageTemplate: DEFAULT_TEMPLATE,
   nameFallback: DEFAULT_NAME_FALLBACK,
-  // Event-level poster/brochure links — this is "the place to add it" for
-  // an event whose CSV doesn't carry a POSTER LINK / ATTACHMENT LINK
-  // column (or whose per-row link has gone stale, e.g. a deleted Drive
-  // file). Empty string means "none configured" — sending stays text-only.
-  // A CSV row's own posterLink/brochureLink, when present, overrides this
-  // per-row (wa/sender.js); this is the fallback, not an override of it.
+  // Event-level poster link — this is "the place to add it" for an event
+  // whose CSV doesn't carry a POSTER LINK column (or whose per-row link has
+  // gone stale, e.g. a deleted Drive file). Empty string means "none
+  // configured" — sending stays text-only. A CSV row's own posterLink, when
+  // present, overrides this per-row (wa/sender.js); this is the fallback,
+  // not an override of it.
   posterLink: "",
-  brochureLink: "",
   // Set instead of posterLink when the operator uploads an image directly
   // rather than pasting a Drive link — just the filename under
   // data/local-poster/ (wa/attachments.js resolves it to an absolute path).
@@ -105,20 +104,20 @@ async function saveSettings(partial) {
 
   next.nameFallback = String(next.nameFallback ?? DEFAULT_NAME_FALLBACK).trim() || DEFAULT_NAME_FALLBACK;
 
-  // Both optional (empty string is valid — "no poster/brochure configured
-  // for this event"), but if something IS provided it must at least be a
+  // Optional (empty string is valid — "no poster configured for this
+  // event"), but if something IS provided it must at least be a
   // well-formed URL, so a typo doesn't sit unnoticed until preflight fails
   // every single recipient.
-  for (const key of ["posterLink", "brochureLink"]) {
-    const val = String(next[key] ?? "").trim();
+  {
+    const val = String(next.posterLink ?? "").trim();
     if (val) {
       try {
         new URL(val);
       } catch {
-        throw new Error(`${key === "posterLink" ? "Poster" : "Brochure"} link is not a valid URL`);
+        throw new Error("Poster link is not a valid URL");
       }
     }
-    next[key] = val;
+    next.posterLink = val;
   }
 
   const upsert = db.prepare(
@@ -159,4 +158,47 @@ function seedTemplateIfMissing() {
   ).run("messageTemplate", DEFAULT_TEMPLATE);
 }
 
-module.exports = { getSettings, saveSettings, seedTemplateIfMissing };
+const POSTER_RESET_MARKER = "posterResetV150";
+
+// One-time migration, v1.5.0: clears every existing install's saved poster
+// (Drive link AND uploaded file) exactly once, so nobody keeps sending
+// whatever image happened to be configured under the old per-row CSV
+// override bug (see docs/decisions.md — a stale POSTER LINK column could
+// silently override an uploaded image with no indication in the UI). After
+// this runs, every teammate's poster is genuinely blank until they set one
+// deliberately. Guarded by presence of the marker key — same idiom as
+// seedTemplateIfMissing, run-once via "does this key already exist".
+//
+// `deleteLocalFile` is injected rather than imported so this module never
+// has to require wa/attachments.js — db/ modules don't depend on wa/
+// modules anywhere else in the codebase, and this shouldn't be the first
+// exception. server.js (which already requires both) passes
+// attachments.deleteLocalPoster in.
+function clearStalePosterOnce(deleteLocalFile) {
+  const marker = db.prepare("SELECT value FROM settings WHERE key = ?").get(POSTER_RESET_MARKER);
+  if (marker) return;
+
+  const uploaded = db.prepare("SELECT value FROM settings WHERE key = ?").get("posterUploadFilename");
+  if (uploaded?.value) deleteLocalFile(uploaded.value);
+
+  const upsert = db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  );
+  db.exec("BEGIN");
+  try {
+    upsert.run("posterLink", "");
+    upsert.run("posterUploadFilename", "");
+    upsert.run(POSTER_RESET_MARKER, "1");
+    db.exec("COMMIT");
+  } catch (e) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      /* BEGIN may not have taken effect — the original error is what matters */
+    }
+    throw e;
+  }
+}
+
+module.exports = { getSettings, saveSettings, seedTemplateIfMissing, clearStalePosterOnce };
