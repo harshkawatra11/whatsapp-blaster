@@ -194,8 +194,121 @@ message as its caption. The caption is verified with the same `verifyComposer` c
 sentinel technique the text path uses — but that only proves the *caption* landed correctly,
 not that the image itself attached; there is no valid way to check the image's presence
 without watching the chat, per the mistake above, so this is stated as a real limit rather
-than implied away. The brochure stays a link — it's a document to open, not an image to
-preview, and link delivery for it was never in question.
+than implied away. The brochure link that originally shipped alongside the poster was later
+removed entirely — see "The brochure feature was removed" below.
+
+## The brochure feature was removed
+
+Explicit operator request: "brochure is hardcoded into the app, remove it." Removed
+end-to-end rather than just hidden from the UI — `template.js`'s `appendBrochureLine`,
+`wa/attachments.js`'s `checkLinkReachable`/`shortenUrl` (TinyURL shortening, brochure-only —
+nothing else called them), `wa/audience.js`'s `BROCHURE_ALIASES`/`ATTACHMENT LINK` CSV column
+support, `db/settings.js`'s `brochureLink` setting, and the whole brochure half of
+`wa/sender.js`'s preflight and per-recipient resolution are all gone, not just disabled.
+
+`recipients.brochure_link` (the SQLite column) is the one thing left in place — dropping a
+column is real, harder-to-reverse data-destructive risk for zero user-facing benefit, since an
+unused nullable column costs nothing and isn't visible anywhere in the app. This matches the
+same additive-only, never-remove migration philosophy `db/schema.js` already followed for
+adding columns; removing one would have been the first exception to it. A fresh install never
+creates the column at all (the migration call for it was removed too) — only pre-existing
+databases carry the now-orphaned column.
+
+## The per-row CSV poster override was removed — and what it was actually causing
+
+A real incident, reported directly: a teammate uploaded a poster image on the starter screen,
+but the wrong (old, previously-configured) image kept going out anyway on every send. Traced
+to three compounding causes, all now fixed:
+
+1. **The real bug.** `wa/sender.js`'s `effectivePoster()` resolved a per-row `POSTER LINK` CSV
+   column (via `wa/audience.js`'s `POSTER_ALIASES`) *before* the event-level
+   `posterUploadFilename`/`posterLink` set on the starter screen. The org's real event CSVs
+   carry that column. So an upload on the starter screen did nothing whenever the loaded CSV
+   had its own poster column — the CSV silently won, per row, with **zero indication anywhere
+   in the UI** that this was happening. This is what actually broke the team's uploads.
+2. **No way to clear a Drive link.** An uploaded file had a ✕ Remove button; a pasted Drive
+   link had nothing. Set once as a test, a link setting persisted forever with no UI path to
+   blank it — confirmed via `saveTemplate()`, which only ever overwrote `posterLink` with a
+   new value, never an explicit empty one from a dedicated control.
+3. **The Drive-file download cache never expired.** `wa/attachments.js`'s `findCachedFile()`
+   returned the same bytes for a given Drive file ID permanently. Replacing the *file* behind
+   an unchanged *link* kept sending the old bytes indefinitely — a second, independent way for
+   a "stale image" complaint to be completely accurate.
+
+Fixed in the same pass, all confirmed with the operator: **per-row CSV posters were removed
+entirely** (not just reprioritized) — `effectivePoster(settings)` no longer takes a `row`
+argument at all, `wa/audience.js`'s `POSTER_ALIASES`/`posterIdx` are gone, and
+`db/campaigns.js` stops writing `poster_link`. One setting is now the *only* source a poster
+can come from, closing off the whole class of "which source actually won" confusion rather
+than just fixing today's specific precedence bug. The Drive-link field gained a **✕ Clear**
+button (posts immediately, not on next Save — clearing is a real action, matching how the
+upload's Remove button already worked). The permanent disk cache in `wa/attachments.js` was
+removed — `downloadDriveFile()` now re-downloads every run (still deduped within a run by the
+existing in-memory cache); a stale link/fresh-file mismatch can't happen anymore because there
+is no stale copy to serve. And the starter screen gained a plain-language **active-poster
+line** ("Sending: your uploaded image (name.jpg)" / "Sending: the Drive link below" / "No
+poster configured") — the single piece whose *absence* let all of this go unnoticed; from now
+on, what will actually be sent is never ambiguous.
+
+**A code fix alone doesn't clear what's already saved on each teammate's machine.** Confirmed
+with the operator: `db/settings.js`'s `clearStalePosterOnce()` runs once at startup (same
+run-once-via-marker-key idiom as `seedTemplateIfMissing`) and wipes any saved poster — link
+*and* uploaded file — for every existing install, the very first time it launches this
+version. Every teammate starts genuinely clean; nobody has to know to click anything. It takes
+the file-delete function as a parameter rather than importing `wa/attachments.js` directly, so
+`db/` doesn't gain a dependency on `wa/` — server.js (which already requires both) wires them
+together.
+
+## `desktop.focus()` now runs before the poster download, not after
+
+`runCampaign()` used to preflight the poster (a network download, up to a 30s timeout) BEFORE
+calling `desktop.focus()`. Pressing **Send Invites** could therefore sit for many seconds with
+nothing visible happening and WhatsApp never coming to the foreground — reported directly as
+"the app doesn't come to the screen when I press the button." Reordered: `focus()` now runs
+first, so WhatsApp comes forward the instant the button is pressed; the poster preflight moved
+into the same `try`/`finally` that owns `overlay.stop()` and the clipboard restore, with the
+overlay showing a `"preparing poster…"` status during the download so a slow or dead link
+reads as visible progress instead of a frozen-looking app.
+
+## `desktop.focus()` stopped trusting `Process.MainWindowHandle` — it lies
+
+Reported from two independent machines in the same week: a teammate's laptop, and this
+project's own dev machine, both showed `focus()` failing outright ("did not come to the
+foreground") while WhatsApp Desktop was demonstrably running with a real, visible window.
+Reproduced directly, not just reported: `Get-Process | Where-Object { ... }` on the dev
+machine returned `MainWindowHandle: 0` for a WhatsApp process that had a perfectly real window
+a human could see and click. `focus()`'s window lookup used to filter on exactly that property
+(`$_.MainWindowHandle -ne 0`) — when it lies, the whole function throws immediately, with no
+recovery attempt, because there was nothing left to try once the (only) candidate process got
+filtered out.
+
+**`Process.MainWindowHandle` is a known-unreliable signal for exactly this class of app** —
+packaged/Store-style apps (WhatsApp Desktop is one; see the "Focus-stealing" entry above for
+the `WhatsApp.Root` process-naming context) and windows that are minimised or still settling
+right after launch can both cause .NET to report a zero handle for a window that genuinely
+exists and is genuinely visible. It's a .NET-level convenience property with narrower coverage
+than the raw Win32 API it's built on.
+
+**Fix: stop asking .NET for the window and ask Win32 directly**, the same "verify against
+ground truth" principle already used elsewhere in this file for foreground identity (owning
+PID, never window title — see above). `Get-WhatsAppWindowHandle` walks the REAL on-screen
+Z-order via `GetTopWindow` + `GetWindow(GW_HWNDNEXT)`, checking `IsWindowVisible` and the
+owning PID (`GetWindowThreadProcessId`) of every top-level window in turn — exactly what a
+human doing Alt-Tab would see, which cannot miss a window that `MainWindowHandle` fails to
+report. `IsWindowVisible` returns true for a minimised window (only a genuinely hidden one
+returns false), so `Set-ForegroundReliable`'s existing `SW_RESTORE` still un-minimises it
+correctly once a real handle is found.
+
+Verified directly against the exact failure, not just against the happy path: with WhatsApp's
+window hidden via `ShowWindow(SW_HIDE)` (closer to the real-world "process running, no
+reachable window" symptom than a plain minimise, which — confirmed separately — never actually
+reproduced a zero `MainWindowHandle` on demand), `focus()` correctly reports a clear
+`"no window found"` failure instead of a misleading one; once the window exists again
+(any state — minimised, restored, freshly launched), `focus()` succeeds. The lookup is now
+inside the same 3-attempt retry loop as the activation itself (previously a single lookup
+happened once, upfront, outside the loop) — catching a window that's still initialising
+right after WhatsApp launches, not just a window that already exists but has drifted out of
+foreground.
 
 ## Anti-ban pacing: configurable, no hard ceiling — and now genuinely reachable
 
@@ -365,8 +478,8 @@ path, `seedTemplateIfMissing()`, additive-only schema migrations).
 
 **One deliberate exception, added with the local-poster-upload feature:** "Start over" now
 *also* deletes an uploaded poster image (file + the `posterUploadFilename` setting), even
-though every other setting — template, name fallback, poster/brochure **links** — stays
-exactly as sticky as described above. Reasoning, confirmed with the operator before
+though every other setting — template, name fallback, the poster **link** — stays exactly as
+sticky as described above. Reasoning, confirmed with the operator before
 building it: a locally uploaded file is closer to "this run's" state than a durable
 preference like a Drive link (which is just text, costs nothing to leave sitting in a
 field) — an operator who's done with an event and clicks the one button that's supposed to

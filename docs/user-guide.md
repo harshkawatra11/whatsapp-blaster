@@ -164,48 +164,48 @@ most notably, a line starting with `- ` becomes a bullet `* `. The editor warns 
 spots this, since it's the one thing most likely to make a send get reported as failed even
 though the message went through fine.
 
-## Adding a poster image or brochure link
+## Adding a poster image
 
-Below the message box is an optional **Poster & Brochure** section. Both take a Google Drive
-link — the file must be shared as **"Anyone with the link can view"**, otherwise the app has
-no way to reach it (no Google sign-in happens anywhere in this app).
+Below the message box is an optional **Poster** section, for attaching an image to every
+message alongside your text. **This is the ONLY place a poster comes from** — there is no
+per-CSV override anymore, so whatever's active here is exactly what every recipient gets,
+with nothing that can silently override it.
 
-- **Poster** — sent as a real image attachment, with your message as its caption. The app
-  downloads it once before a run starts (not once per recipient), then attaches the same
-  local copy to every message.
-  - **Or skip the Drive link entirely and upload the image directly** — click or drag a file
-    onto the **"Or upload a poster image directly"** box just below the link field. This is
-    the faster option if the picture is already sitting on your computer: no Drive account,
-    no sharing settings to get right. The two are mutually exclusive — uploading a file
-    clears and disables the link field (a small thumbnail + **✕ Remove** button appear
-    instead), and removing the upload re-enables the link. Whichever one is active is what
-    every recipient gets attached, exactly the same way either source is used.
+A line just above the two options always tells you plainly what's currently active —
+*"Sending: your uploaded image (filename.jpg)"*, *"Sending: the Drive link below"*, or
+*"No poster configured — sending plain text."* Trust that line; it's the answer to "what am
+I actually about to send."
+
+- **Via a Google Drive link** — the file must be shared as **"Anyone with the link can
+  view"**, otherwise the app has no way to reach it (no Google sign-in happens anywhere in
+  this app). Sent as a real image attachment, with your message as its caption. The app
+  downloads it **fresh at the start of every run** (not cached from a previous run) — so if
+  you swap the image behind the same Drive link, the new one is what goes out next time, not
+  a stale copy. Click **✕ Clear** next to the field to remove it.
+- **Or skip the Drive link entirely and upload the image directly** — click or drag a file
+  onto the **"Or upload a poster image directly"** box just below the link field. This is
+  the faster option if the picture is already sitting on your computer: no Drive account,
+  no sharing settings to get right. The two are mutually exclusive — uploading a file
+  clears and disables the link field (a small thumbnail + **✕ Remove** button appear
+  instead), and removing the upload re-enables the link.
   - **The uploaded image stays active across every future send** — it's not tied to one
     campaign — until you either remove it, upload a different image over it, or click **Start
     over**, which now also clears the uploaded poster along with the campaign history (see
-    below). A per-row `POSTER LINK`/`ATTACHMENT LINK` value in your CSV still overrides
-    whichever source (link or upload) is active, for that row only, same as before.
-- **Brochure** — added as a plain link line under your message: `View Brochure: <link>`.
-  WhatsApp has no way to hide a link behind other text, so the link itself is what recipients
-  see and tap — but it's tappable either way, since WhatsApp auto-detects any bare
-  `https://` link as a blue, tappable link on its own. The app shortens the raw Google Drive
-  link via TinyURL before sending (once per distinct link, not per recipient) so what shows
-  up is short and clean instead of a long Drive URL; if shortening fails for any reason it
-  quietly falls back to the original link, so a send is never blocked by it.
-  (A poster is sent as an image rather than a link because a link genuinely
-  can't show one here — Google Drive's page doesn't carry the information WhatsApp needs to
-  render a preview picture. See `docs/decisions.md` if you want the full story.)
-- Leave either blank to skip it — the app sends plain text, exactly as before.
-- If your CSV has its own `POSTER LINK` or `ATTACHMENT LINK` column, that row's own value is
-  used instead of what's set here — this section is the fallback for everyone else, and the
-  only place to put a poster/brochure at all if your CSV doesn't have those columns.
-- Before a send starts, the app fetches the poster once and checks the brochure link, telling
-  you loudly in the log if either doesn't work (a deleted file, a private share) — you don't
-  have to wait for every recipient to fail individually to find out.
-- A broken brochure link never stops a send — it's just a link line that may not open. A
-  poster that fails to download stops **that recipient** specifically (reported failed with a
-  clear reason), since sending a different message than intended would be worse than not
-  sending; a broken brochure link carries no such risk, so it's treated more leniently.
+    below).
+- Leave both blank to send plain text.
+- Before a send starts, the app fetches the poster once, telling you loudly in the log if it
+  doesn't work (a deleted file, a private share) — you don't have to wait for every recipient
+  to fail individually to find out. A poster that fails to download stops **that recipient**
+  specifically (reported failed with a clear reason), since sending a different message than
+  intended would be worse than not sending.
+- (A poster is sent as an image rather than a link because a link genuinely can't show one
+  here — Google Drive's page doesn't carry the information WhatsApp needs to render a preview
+  picture. See `docs/decisions.md` if you want the full story.)
+
+**If you're upgrading from an earlier version:** the very first launch after updating clears
+out whatever poster was previously configured, for everyone — a one-time reset (see
+`docs/decisions.md`) so no one keeps sending an old test image by accident. You'll need to
+set a poster again if you want one.
 
 ## Troubleshooting
 

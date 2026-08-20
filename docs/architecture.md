@@ -60,13 +60,13 @@ comparison and avoids SQLite's text-based date functions entirely.
 |---|---|
 | `wa_sessions` | Sender numbers the operator has confirmed. **Not** a WhatsApp login — WhatsApp Desktop owns its own session entirely; this table only labels which number is "active" for daily-cap tracking. |
 | `campaigns` | One row per CSV upload. `status`: `draft` → `running` → `done` / `aborted`. |
-| `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. `poster_link`/`brochure_link` (nullable) carry a per-row override from an optional `POSTER LINK`/`ATTACHMENT LINK` CSV column. |
-| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the event-level `posterLink`/`brochureLink` fallback (plus `posterUploadFilename`, mutually exclusive with `posterLink` — see decisions.md) — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
+| `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. `poster_link`/`brochure_link` columns still exist on disk for installs that had them, but nothing writes or reads either anymore — per-row CSV posters and the brochure feature were both removed, see decisions.md. |
+| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the ONE event-level poster (`posterLink` or `posterUploadFilename`, mutually exclusive — see decisions.md) — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`, set per-connection since SQLite
 disables this by default) — deleting a campaign cascades to its recipients.
 
-`recipients.poster_link`/`brochure_link` were added after release via a **guarded migration**
+`recipients.poster_link` was added after release via a **guarded migration**
 (`db/schema.js`'s `migrateAddColumnIfMissing`) rather than editing the base `CREATE TABLE`
 directly — `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, so an
 in-place DDL edit would have broken every install with a live database. Checks
@@ -110,8 +110,8 @@ object per line, flushed as the run progresses:
 
 Per-recipient events carry `state` (`submitted` | `unknown` | `skipped`); the `type`-only
 events (`pause`, `aborted`, `error`, `warning`) are progress/control signals with no recipient
-attached. `warning` is emitted by the poster/brochure link preflight (see below) — non-fatal,
-surfaced in the log terminal, never stops the run.
+attached. `warning` is emitted by the poster preflight (see below) — non-fatal, surfaced in
+the log terminal, never stops the run.
 
 ## Send-loop state machine (`wa/sender.js`)
 
@@ -119,25 +119,21 @@ surfaced in the log terminal, never stops the run.
 runCampaign()
   → settingsDb.getSettings()        (read fresh — a mid-run settings edit is deliberately
                                       NOT picked up until the next run starts)
-  → preflightAttachments()           (BEFORE focusing WhatsApp — pure network I/O)
-      → every DISTINCT poster (per-row CSV override, else the event-level setting — which
-        is EITHER a Drive link OR a local upload, see effectivePoster()/posterKey()) is
-        resolved once: a link is DOWNLOADED via wa/attachments.js and cached to disk; a
-        local upload is just confirmed still present on disk (attachments.resolveLocalPoster,
-        no network) — not once per recipient either way, since a shared event-level poster
-        means a dead link (or a deleted upload) would otherwise fail identically on every
-        recipient using it.
-      → every distinct brochure link gets a HEAD reachability check (warns, never
-        blocks) plus a one-time TinyURL shortening of the raw Drive share link — a
-        shortening failure falls back silently to the original link, no warning.
-  → desktop.focus()                 (throws → stoppedEarly: "focus_failed", 0 sends)
+  → desktop.focus()                 (throws → stoppedEarly: "focus_failed", 0 sends. Runs
+                                      BEFORE any network I/O — moved ahead of the poster
+                                      preflight below so pressing Send Invites brings
+                                      WhatsApp up immediately instead of the app looking
+                                      frozen during a slow/dead poster download.)
   → overlay.start()
+  → preflightPoster()                (inside the loop's try/finally, so overlay.stop() +
+                                      the clipboard restore still cover it)
+      → the ONE event-level poster (EITHER a Drive link OR a local upload — see
+        effectivePoster(); no per-row CSV override exists anymore, see decisions.md) is
+        resolved ONCE for the whole run: a link is DOWNLOADED fresh via wa/attachments.js
+        (no permanent disk cache — see decisions.md for why), a local upload is just
+        confirmed still present on disk (attachments.resolveLocalPoster, no network).
   → for each recipient:
       skip if already 'skipped', or daily cap reached, or operator aborted
-      → resolve this row's effective poster (effectivePoster(): row's own CSV link wins,
-        else the event-level upload, else the event-level link) and brochure link (row's
-        own CSV value wins, settings value is the fallback); append "View Brochure: <url>"
-        to the text when configured (the poster is NOT appended as text — see below)
       → sendOne(phone, text, dryRun, posterLocalPath):
           resetToCleanState → openChatByNumber →
           POSTER path: setClipboardImage → pasteImage → pasteCaption(text) →
