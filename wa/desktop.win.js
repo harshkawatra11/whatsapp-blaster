@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const path = require("path");
 const { normaliseLineEndings, similarity, VERIFY_SIMILARITY_THRESHOLD } = require("./verify");
 
 // Drives the WhatsApp Desktop Windows app via keyboard automation. No new
@@ -23,6 +24,21 @@ const { normaliseLineEndings, similarity, VERIFY_SIMILARITY_THRESHOLD } = requir
 // "WhatsApp" — verified via Get-Process. Matched with -like so either naming
 // (older builds shipped plain "WhatsApp") still resolves.
 const WHATSAPP_PROCESS_FILTER = "*WhatsApp*";
+
+// Self-exclusion identity: the packaged app's own productName is
+// "WhatsApp Blaster", which matches the wildcard above ("WhatsApp Blaster"
+// -like "*WhatsApp*" is True). Every process this app spawns (main, GPU,
+// renderers) shares process.execPath, so excluding on that one value alone
+// covers all of them; the process-name check additionally covers a second
+// copy of the Blaster run from a different install path; the PID is cheap
+// belt-and-braces on the main process itself. These MUST be computed here
+// in Node — not looked up inside PowerShell via $PID (that's the
+// PowerShell child's pid, not this app's) or via a runtime
+// (Get-Process -Id ...).Name lookup (a null result there would silently
+// disable the exclusion).
+const OWN_EXE_PATH = process.execPath;
+const OWN_PROC_NAME = path.basename(process.execPath, ".exe");
+const OWN_PID = process.pid;
 
 // A PowerShell child blocked on a contended clipboard (Office, RDP, and
 // clipboard managers all take that lock routinely) previously hung this
@@ -98,6 +114,9 @@ async function runPowerShellUnicode(script) {
 // GetWindowThreadProcessId + a process-id comparison cannot be fooled by tab
 // titles.
 const PS_PREAMBLE = `
+$WabOwnExePath = '${psQuote(OWN_EXE_PATH)}'
+$WabOwnProcName = '${psQuote(OWN_PROC_NAME)}'
+$WabOwnPid = ${OWN_PID}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $sig = @'
@@ -131,24 +150,32 @@ function Get-ForegroundTitle {
 }
 
 function Get-WhatsAppProcessIds {
-  return (Get-Process | Where-Object { $_.Name -like "${WHATSAPP_PROCESS_FILTER}" }).Id
+  return (Get-Process |
+    Where-Object { $_.Name -like "${WHATSAPP_PROCESS_FILTER}" } |
+    Where-Object {
+      $_.Id -ne $WabOwnPid -and
+      $_.Path -ne $WabOwnExePath -and
+      $_.Name -ne $WabOwnProcName
+    }).Id
 }
 
 # Finds WhatsApp's real top-level window by walking the actual on-screen
 # Z-order (GetTopWindow + GetWindow(GW_HWNDNEXT), matching each window's
-# owning PID against Get-WhatsAppProcessIds) — NOT by trusting .NET's
-# Process.MainWindowHandle, which this file used to rely on and which
-# reproducibly comes back 0 for WhatsApp on some machines: confirmed
-# directly (both in this app's own testing and reported from a teammate's
-# separate laptop) that WhatsApp can be genuinely running with a real,
-# visible window while MainWindowHandle still reports zero — a known
-# unreliability for packaged/Store-style apps and for windows that are
-# minimised or still settling right after launch. Walking the Z-order and
-# checking IsWindowVisible (true for minimised windows — ShowWindow's
-# SW_RESTORE in Set-ForegroundReliable handles un-minimising once a real
-# handle is found) finds exactly what a human clicking through Alt-Tab
-# would see, so it can't miss a window that MainWindowHandle fails to
-# report.
+# owning PID against Get-WhatsAppProcessIds) rather than trusting .NET's
+# Process.MainWindowHandle. The Z-order walk is kept because it mirrors what
+# a human clicking through Alt-Tab would see, but the real reason focus()
+# used to land on the wrong window was NOT MainWindowHandle: it was that
+# Get-WhatsAppProcessIds matched this app's OWN processes too, because the
+# packaged productName "WhatsApp Blaster" satisfies the "*WhatsApp*"
+# wildcard filter it was built from. Since the walk always returns the
+# topmost matching window, and this app's own window is topmost whenever
+# the operator has just clicked its Send Invites button, it deterministically
+# resolved to the Blaster's own window, not WhatsApp's. The zero
+# MainWindowHandle values observed at the time belonged to this app's own
+# helper/renderer processes (which legitimately have no window), not to
+# WhatsApp. Get-WhatsAppProcessIds now excludes this app's own processes by
+# path, name and pid (see OWN_EXE_PATH/OWN_PROC_NAME/OWN_PID above), which is
+# what actually fixes window resolution; the Z-order walk itself was fine.
 function Get-WhatsAppWindowHandle {
   $waIds = @(Get-WhatsAppProcessIds)
   if ($waIds.Count -eq 0) { return [IntPtr]::Zero }
@@ -198,7 +225,7 @@ function Set-ForegroundReliable([IntPtr]$hwnd) {
 
 async function isRunning() {
   const out = await runPowerShell(
-    `Get-Process | Where-Object { $_.Name -like "${WHATSAPP_PROCESS_FILTER}" } | Select-Object -First 1 -ExpandProperty Id`
+    `${PS_PREAMBLE}\n(@(Get-WhatsAppProcessIds) | Select-Object -First 1)`
   ).catch(() => "");
   return out.trim().length > 0;
 }
@@ -228,7 +255,10 @@ if (-not $ok) {
   Write-Output ("FAILED:" + $seen)
   exit
 }
-Write-Output (Get-ForegroundTitle)
+$fgWnd = [WAB.Win32]::GetForegroundWindow()
+$ownerPid = 0
+[WAB.Win32]::GetWindowThreadProcessId($fgWnd, [ref]$ownerPid) | Out-Null
+Write-Output ("OK:" + $ownerPid + ":" + (Get-ForegroundTitle))
 `;
   const result = await runPowerShell(script);
   if (result === "NOT_RUNNING") {
@@ -236,6 +266,13 @@ Write-Output (Get-ForegroundTitle)
   }
   if (result.startsWith("FAILED:")) {
     throw new Error(`WhatsApp Desktop did not come to the foreground (saw "${result.slice(7)}")`);
+  }
+  if (result.startsWith("OK:")) {
+    const rest = result.slice(3);
+    const sep = rest.indexOf(":");
+    const pid = sep === -1 ? rest : rest.slice(0, sep);
+    const title = sep === -1 ? "" : rest.slice(sep + 1);
+    return `${title} (pid ${pid})`;
   }
   return result;
 }

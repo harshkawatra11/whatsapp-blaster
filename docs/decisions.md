@@ -310,6 +310,25 @@ happened once, upfront, outside the loop) — catching a window that's still ini
 right after WhatsApp launches, not just a window that already exists but has drifted out of
 foreground.
 
+**Correction (v1.5.1): the `Process.MainWindowHandle` diagnosis above was wrong.** The Z-order
+walk described above is still correct and was kept, but it was not what actually fixed the
+"Send Invites focuses WhatsApp Blaster instead of WhatsApp Desktop" bug that surfaced after
+this change shipped. The real root cause: `Get-WhatsAppProcessIds` filtered processes with the
+wildcard `"*WhatsApp*"`, and the packaged app's own `productName`, `"WhatsApp Blaster"`, matches
+that wildcard (`"WhatsApp Blaster" -like "*WhatsApp*"` is `True`). Measured directly with both
+the packaged Blaster and real WhatsApp running: `Get-WhatsAppProcessIds` returned four Blaster
+PIDs plus one WhatsApp PID, and since the Z-order walk always returns the *topmost* matching
+window — which is the Blaster's own window whenever the operator has just clicked its own Send
+Invites button — it deterministically resolved the Blaster's window, not WhatsApp's, then
+foregrounded it and reported success. The zero `MainWindowHandle` values observed in the original
+investigation belonged to the Blaster's own helper/renderer processes (which legitimately have no
+window), not to WhatsApp itself; `MainWindowHandle` was never actually lying about WhatsApp. Fixed
+in v1.5.1 by excluding this app's own processes from `Get-WhatsAppProcessIds` by executable path,
+process name, and PID, all injected from Node (`process.execPath`, `process.pid`) rather than
+derived inside PowerShell. `isRunning()` was also rewritten to reuse the same
+`Get-WhatsAppProcessIds`, since previously it re-inlined the raw unfiltered wildcard and reported
+the sender as "ready" even with WhatsApp closed, as long as the Blaster itself was running.
+
 ## Anti-ban pacing: configurable, no hard ceiling — and now genuinely reachable
 
 The product requirement was always "sensible defaults shown in the UI, every limit editable,
