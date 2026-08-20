@@ -331,18 +331,20 @@
       <div><label>If a recipient's name is blank, use</label><input type="text" id="tplFallback" placeholder="there" oninput="renderTplPreview()" /></div>
     </div>
 
-    <div class="card-label" style="margin-top:8px">01C / Poster &amp; Brochure (optional)</div>
+    <div class="card-label" style="margin-top:8px">01C / Poster (optional)</div>
     <p class="note" style="margin-bottom:12px">
-      Paste Google Drive links here — must be shared as <strong>"Anyone with the link can
-      view."</strong> The poster is sent as a real image attachment, with your message as its
-      caption. The brochure is added as a plain link line under the message instead (WhatsApp
-      has no way to hide a link behind text, so the link itself is what recipients see).
-      Leave either blank to skip it. A CSV column (<code>POSTER LINK</code> /
-      <code>ATTACHMENT LINK</code>) overrides these per-row if present.
+      Attach an image to every message you send — either a Google Drive link (shared as
+      <strong>"Anyone with the link can view"</strong>) or a file uploaded directly below.
+      Only one source is ever active. Leave both blank to send plain text. There is no
+      per-row CSV override anymore — whatever's set here is what every recipient gets.
     </p>
-    <div class="row-2" style="margin-bottom:14px">
-      <div><label>Poster image link</label><input type="text" id="tplPosterLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
-      <div><label>Brochure link</label><input type="text" id="tplBrochureLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" /></div>
+    <div id="posterActiveLine" class="note" style="margin-bottom:12px; font-weight:600;"></div>
+    <div style="margin-bottom:14px">
+      <label>Poster image link</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="text" id="tplPosterLink" placeholder="https://drive.google.com/file/d/…/view" oninput="renderTplPreview()" style="flex:1;" />
+        <button type="button" class="btn btn-ghost btn-sm" id="tplPosterLinkClearBtn" onclick="clearPosterLink()">✕ Clear</button>
+      </div>
     </div>
 
     <div style="margin-bottom:14px">
@@ -378,9 +380,8 @@
     <p class="note" style="margin-bottom:16px">
       Needs a <strong>name</strong> column and a <strong>phone</strong> column
       (any of: phone, mobile, number, contact, whatsapp). Bare 10-digit numbers get +91 automatically.
-      S.No. always means the row's line number in your own file. A <code>POSTER LINK</code> /
-      <code>ATTACHMENT LINK</code> column is optional and overrides the poster/brochure set
-      on Step 1 for that row only.
+      S.No. always means the row's line number in your own file. The poster (if any) always
+      comes from Step 1 — any other columns in your CSV are ignored.
     </p>
     <div class="dropzone" id="dropzone">
       <input type="file" id="csvFile" accept=".csv" />
@@ -631,17 +632,6 @@ function fillTemplatePreview(text, row, fallback) {
   });
 }
 
-// Mirrors template.js's appendBrochureLine() — a fixed, non-editable
-// addition, never a {{chip}} the operator inserts themselves. WhatsApp has
-// no hyperlink markup, so the raw URL has to be visible as-is. The poster
-// is NOT appended here — it's sent as a real attached image instead (a
-// link produces no visible thumbnail — confirmed directly against a real
-// send), so the preview shows an attachment indicator for it instead.
-function appendBrochureLinePreview(text, brochureLink) {
-  if (!brochureLink) return text;
-  return text + '\n\nView Brochure: ' + brochureLink;
-}
-
 function isValidUrl(s) {
   if (!s) return true; // empty is valid — "not configured"
   try { new URL(s); return true; } catch { return false; }
@@ -652,21 +642,44 @@ function isValidUrl(s) {
 // input is disabled/blanked while an upload is active and no longer
 // carries that information itself.
 let posterUploadActive = false;
+let posterUploadFilenameActive = '';
+
+// The one thing whose absence let the team send the wrong image without
+// ever seeing a signal: a plain-language line stating exactly what WILL be
+// attached, since there are now two possible sources (link or upload) and
+// no per-row override to fall back on. Called from renderPosterUploadState
+// (upload/remove) and renderTplPreview (every link-field keystroke), so it
+// never goes stale.
+function renderPosterActiveLine() {
+  const el = $('posterActiveLine');
+  if (posterUploadActive) {
+    el.textContent = '📎 Sending: your uploaded image (' + posterUploadFilenameActive + ')';
+    el.style.color = 'var(--accent2)';
+  } else if ($('tplPosterLink').value.trim()) {
+    el.textContent = '📎 Sending: the Drive link below';
+    el.style.color = 'var(--accent2)';
+  } else {
+    el.textContent = 'No poster configured — sending plain text.';
+    el.style.color = 'var(--muted)';
+  }
+}
 
 function renderTplPreview() {
   const text = $('tplText').value;
   const fallback = $('tplFallback').value.trim();
   const posterLink = $('tplPosterLink').value.trim();
-  const brochureLink = $('tplBrochureLink').value.trim();
   // Real data from the CSV once one's loaded, so the preview isn't just a
   // hypothetical — otherwise a blank name in the actual file wouldn't be
-  // visible until a real send.
+  // visible until a real send. There is no per-row poster override anymore
+  // (removed — see docs/decisions.md) — the poster is always whichever
+  // event-level source (link or upload) is active.
   const row = recipients.length ? recipients[0] : TPL_SAMPLE_ROW;
-  const effectivePoster = (row.posterLink || (posterUploadActive ? 'local-upload' : posterLink) || '').trim();
-  const effectiveBrochure = (row.brochureLink || brochureLink || '').trim();
-  let filled = fillTemplatePreview(text, row, fallback);
-  filled = appendBrochureLinePreview(filled, effectiveBrochure);
-  $('tplPreview').textContent = (effectivePoster ? '📎 [poster image attached]\n\n' : '') + (filled || '(empty — recipients would get nothing)');
+  const posterSourceLabel = posterUploadActive ? 'uploaded file' : posterLink ? 'Drive link' : null;
+  const filled = fillTemplatePreview(text, row, fallback);
+  $('tplPreview').textContent =
+    (posterSourceLabel ? `📎 [poster image attached — ${posterSourceLabel}]\n\n` : '') +
+    (filled || '(empty — recipients would get nothing)');
+  renderPosterActiveLine();
 
   const warnings = [];
   if (!text.trim()) warnings.push('The message is empty — it will be rejected when you try to save.');
@@ -686,7 +699,6 @@ function renderTplPreview() {
 
   const linkWarnings = [];
   if (!isValidUrl(posterLink)) linkWarnings.push('Poster link doesn’t look like a valid URL.');
-  if (!isValidUrl(brochureLink)) linkWarnings.push('Brochure link doesn’t look like a valid URL.');
   const linkWarnEl = $('tplLinkWarn');
   if (linkWarnings.length) {
     linkWarnEl.textContent = '⚠ ' + linkWarnings.join('  ·  ');
@@ -714,15 +726,40 @@ function insertChip(field) {
 // server actually has, rather than trusting optimistic local state.
 function renderPosterUploadState(filename) {
   posterUploadActive = !!filename;
+  posterUploadFilenameActive = filename || '';
   $('posterDropzone').classList.toggle('hidden', posterUploadActive);
   $('posterUploadedRow').classList.toggle('hidden', !posterUploadActive);
   $('tplPosterLink').disabled = posterUploadActive;
+  $('tplPosterLinkClearBtn').disabled = posterUploadActive;
   if (posterUploadActive) {
     $('tplPosterLink').value = '';
     $('tplPosterLink').placeholder = 'cleared — a local image is active (Remove it to use a link instead)';
     $('posterThumb').src = '/api/settings/poster-upload?t=' + Date.now();
+    $('posterUploadedName').textContent = filename;
   } else {
     $('tplPosterLink').placeholder = 'https://drive.google.com/file/d/…/view';
+  }
+  renderPosterActiveLine();
+}
+
+// Clearing a Drive link is a real action, not something to remember to
+// Save — posts immediately, mirroring the upload/remove endpoints' own
+// immediate-effect behaviour, since a link had no way to be cleared at all
+// before this (only an upload had a ✕ Remove button).
+async function clearPosterLink() {
+  $('tplPosterLink').value = '';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ posterLink: '' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to clear the poster link');
+    toast('Poster link cleared', 'info');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    renderTplPreview();
   }
 }
 
@@ -732,7 +769,6 @@ async function loadTemplate() {
     $('tplText').value = s.messageTemplate || '';
     $('tplFallback').value = s.nameFallback || 'there';
     $('tplPosterLink').value = s.posterLink || '';
-    $('tplBrochureLink').value = s.brochureLink || '';
     renderPosterUploadState(s.posterUploadFilename || '');
     renderTplPreview();
   } catch (e) { toast('Could not load the message template: ' + e.message, 'error'); }
@@ -786,13 +822,11 @@ async function saveTemplate() {
   const messageTemplate = $('tplText').value;
   if (!messageTemplate.trim()) return toast('The message can’t be empty', 'error');
   const posterLink = $('tplPosterLink').value.trim();
-  const brochureLink = $('tplBrochureLink').value.trim();
   if (!isValidUrl(posterLink)) return toast('Poster link doesn’t look like a valid URL', 'error');
-  if (!isValidUrl(brochureLink)) return toast('Brochure link doesn’t look like a valid URL', 'error');
   try {
     const res = await fetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageTemplate, nameFallback: $('tplFallback').value.trim() || 'there', posterLink, brochureLink })
+      body: JSON.stringify({ messageTemplate, nameFallback: $('tplFallback').value.trim() || 'there', posterLink })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to save the message');
@@ -807,8 +841,9 @@ async function saveTemplate() {
 // it must stay disabled after a run ends too if a local upload is still
 // active, which a blind `.disabled = false` here would otherwise undo.
 function setTemplateEditorDisabled(disabled) {
-  ['tplText', 'tplFallback', 'tplBrochureLink', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
+  ['tplText', 'tplFallback', 'tplResetBtn', 'tplSaveBtn'].forEach((id) => { $(id).disabled = disabled; });
   $('tplPosterLink').disabled = disabled || posterUploadActive;
+  $('tplPosterLinkClearBtn').disabled = disabled || posterUploadActive;
   $('posterUploadFile').disabled = disabled;
   $('posterDropzone').style.pointerEvents = disabled ? 'none' : '';
   $('posterDropzone').style.opacity = disabled ? '0.5' : '';
@@ -1073,10 +1108,10 @@ async function startOver() {
   await loadNumbers();
   // Deliberately NOT calling loadTemplate() here — Start Over clears this
   // sender's campaign history, never the saved message template or the
-  // poster/brochure LINK settings. The uploaded poster image is the one
-  // exception (server.js's DELETE /api/campaigns already deleted the file
-  // and cleared posterUploadFilename) — reflect that locally instead of a
-  // full reload, same reasoning as skipping loadTemplate() above.
+  // poster LINK setting. The uploaded poster image is the one exception
+  // (server.js's DELETE /api/campaigns already deleted the file and
+  // cleared posterUploadFilename) — reflect that locally instead of a full
+  // reload, same reasoning as skipping loadTemplate() above.
   renderPosterUploadState('');
   renderTplPreview();
   goStep(1);
