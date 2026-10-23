@@ -25,6 +25,7 @@ Express server (server.js) ── bound to 127.0.0.1 only, no auth (offline sing
 public/index.html — the entire frontend: one static file, no build step, no framework
 public/overlay.html — content for the always-on-top progress window
 template.js — the message template default + {{placeholder}} fill logic
+pacing.js — pacing profiles + human-timing helpers (jitter, typing delays, splitForTyping)
 update-status.js — Windows auto-update / macOS manual-update state, bridged to the renderer
 platform-status.js — macOS Accessibility-permission state, bridged to the renderer
 ```
@@ -35,8 +36,8 @@ keyboard automation, not a browser session, because the CSV contacts only resolv
 through a real desktop app instance.
 
 **Two platform backends behind one contract.** `wa/sender.js` and `server.js` call
-`wa/desktop.js`'s 15-function contract (`focus`, `openChatByNumber`, `pasteIntoComposer`,
-`verifyComposer`, …) without knowing which OS is running — the dispatcher in `desktop.js`
+`wa/desktop.js`'s 16-function contract (`focus`, `openChatByNumber`, `pasteIntoComposer`,
+`typeText`, `verifyComposer`, …) without knowing which OS is running — the dispatcher in `desktop.js`
 `require()`s `desktop.win.js` or `desktop.mac.js` based on `process.platform`, and neither
 backend is even parsed on the other OS. `wa/sender.js` itself has **zero** platform-specific
 code, which is what made this split possible without touching the orchestration logic at
@@ -61,7 +62,7 @@ comparison and avoids SQLite's text-based date functions entirely.
 | `wa_sessions` | Sender numbers the operator has confirmed. **Not** a WhatsApp login — WhatsApp Desktop owns its own session entirely; this table only labels which number is "active" for daily-cap tracking. |
 | `campaigns` | One row per CSV upload. `status`: `draft` → `running` → `done` / `aborted`. |
 | `recipients` | One row per CSV row, keyed by `(campaign_id, sno)`. `state`: `pending` → `submitted` / `unknown` / `skipped`. `sno` always means "line N of the operator's own CSV" — rows are never renumbered or dropped, only marked skipped. `poster_link`/`brochure_link` columns still exist on disk for installs that had them, but nothing writes or reads either anymore — per-row CSV posters and the brochure feature were both removed, see decisions.md. |
-| `settings` | Plain key/value. Pacing, daily cap, default country code, the message template + name fallback, and the ONE event-level poster (`posterLink` or `posterUploadFilename`, mutually exclusive — see decisions.md) — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
+| `settings` | Plain key/value. The pacing profile key (`pacingProfile`: cautious/balanced/fast, defined in `pacing.js`), the default country code (no UI), the message template + name fallback, and the ONE event-level poster (`posterLink` or `posterUploadFilename`, mutually exclusive — see decisions.md) — everything a non-technical operator can tune from the UI, none of it in `.env` (a packaged app's install directory is read-only, so `.env` would be unreachable). |
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`, set per-connection since SQLite
 disables this by default) — deleting a campaign cascades to its recipients.
@@ -81,8 +82,9 @@ All routes are local-only (`127.0.0.1`), JSON in/out except the CSV/poster uploa
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | Liveness check. |
-| GET | `/api/settings` | Current pacing/cap/country/template settings (merged with defaults). |
+| GET | `/api/settings` | Current settings (pacing profile, country, template, poster), merged with defaults. |
 | POST | `/api/settings` | Partial update — merges over current settings, validates, persists. |
+| GET | `/api/pacing-profiles` | The three pacing profiles from `pacing.js` plus the default key, for the ⚙ panel. |
 | GET | `/api/template/default` | The built-in default message, for the editor's "Reset to default". |
 | POST | `/api/settings/poster-upload` | Upload a poster image directly (multipart, field `file`, ≤16MB) — saves it to `data/local-poster/`, sets `posterUploadFilename`, clears `posterLink` (mutually exclusive with a Drive link — see decisions.md). |
 | DELETE | `/api/settings/poster-upload` | Removes the uploaded poster (deletes the file, clears `posterUploadFilename`). |
@@ -95,6 +97,8 @@ All routes are local-only (`127.0.0.1`), JSON in/out except the CSV/poster uploa
 | DELETE | `/api/campaigns?senderId=` | "Start over" — purges all campaigns (and cascaded recipients) for one sender, and deletes an uploaded poster if one is active (the one setting Start Over resets — see decisions.md). |
 | POST | `/api/campaigns/:id/send` | Body `{ snos: number[] }`. Streams NDJSON progress, one line per event. Rejects with 409 if a send is already running (only one at a time, system-wide). |
 | POST | `/api/campaigns/:id/abort` | Cooperative abort of the campaign's active send. 404 if nothing is running for that id. |
+| POST | `/api/campaigns/:id/pause` | Cooperative pause of the active send (freezes gaps/breaks; current message finishes). 404 if nothing is running. |
+| POST | `/api/campaigns/:id/resume` | Resume a paused send; WhatsApp is re-focused before the next keystroke. |
 
 ### The send stream
 
@@ -103,15 +107,16 @@ object per line, flushed as the run progresses:
 
 ```
 {"sno":1,"name":"Priya","phone":"919...","state":"submitted","error":null}
-{"type":"pause","ms":153000}
+{"type":"pause","reason":"break","ms":253000}
 {"sno":2,"name":"Rahul","phone":"919...","state":"unknown","error":"send failed: ..."}
 {"type":"aborted","reason":"3 consecutive failures — stopping"}
 ```
 
 Per-recipient events carry `state` (`submitted` | `unknown` | `skipped`); the `type`-only
-events (`pause`, `aborted`, `error`, `warning`) are progress/control signals with no recipient
-attached. `warning` is emitted by the poster preflight (see below) — non-fatal, surfaced in
-the log terminal, never stops the run.
+events (`info`, `pause` (with `reason`: `break` | `hourly`), `paused`, `resumed`, `aborted`,
+`error`, `warning`) are progress/control signals with no recipient attached. `warning` is
+emitted by the poster preflight (see below) — non-fatal, surfaced in the log terminal, never
+stops the run.
 
 ## Send-loop state machine (`wa/sender.js`)
 
@@ -136,16 +141,17 @@ runCampaign()
       skip if already 'skipped', or daily cap reached, or operator aborted
       → sendOne(phone, text, dryRun, posterLocalPath):
           resetToCleanState → openChatByNumber →
-          POSTER path: setClipboardImage → pasteImage → pasteCaption(text) →
+          POSTER path: setClipboardImage → pasteImage → captionLikeHuman(text) →
             verifyComposer(text) (ONE retry of the whole attach sequence on failure)
             → verified? pressEnterToSend, report 'submitted'
-          NO POSTER: pasteIntoComposer → verifyComposer (ONE retry on failure)
+          NO POSTER: composeLikeHuman (type first line + Shift+Enter, paste rest) → verifyComposer (ONE retry on failure)
             → verified? pressEnterToSend, report 'submitted'
           → not verified after retry, either path? discard/clear, report 'unknown'
       → persist result, emit NDJSON event, update the overlay
       → 3 consecutive failures → stoppedEarly: "consecutive_failures", loop ends
-      → pace: short random delay, or a longer pause every `sendBatchSize` sends
-        (abort-aware — checked every 500ms during a pause, not just between sends)
+      → pace (pacing.js profile): humanGap() between recipients, a randomly-spaced long
+        break every breakEvery sends, hourly-cap wait before a send, none after the last one
+        (abort- AND pause-aware: checked every 500ms; the countdown freezes while paused)
   → overlay.stop(), restore the operator's original clipboard
   → return { stoppedEarly, reason }
 ```

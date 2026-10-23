@@ -66,6 +66,19 @@
   }
   .icon-btn:hover { color: var(--text); border-color: var(--muted); }
 
+  .profile-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .profile-card {
+    display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
+    background: var(--bg); border: 1px solid var(--border2); border-radius: 8px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .profile-card:hover { border-color: var(--muted); }
+  .profile-card.sel { border-color: var(--accent); background: rgba(37,211,102,0.06); }
+  .profile-card input { margin-top: 3px; flex-shrink: 0; }
+  .profile-name { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+  .profile-tag { font-size: 0.6rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-left: 8px; }
+  .profile-desc { font-size: 0.7rem; color: var(--muted); margin-top: 4px; line-height: 1.55; }
+
   main { position: relative; z-index: 1; max-width: 1000px; margin: 0 auto; padding: 40px 24px 80px; }
 
   .steps-bar {
@@ -274,7 +287,7 @@
   <h1>WhatsApp <span>Blaster</span></h1>
   <div class="header-sub">Bulk Invite Automation</div>
   <span id="appVersion"></span>
-  <button class="icon-btn" onclick="showSettings()" title="Settings">⚙</button>
+  <button class="icon-btn" onclick="showSettings()" title="Sending speed">⚙</button>
 </header>
 
 <div id="updateBanner" class="hidden">
@@ -367,6 +380,11 @@
     </div>
     <div id="tplLinkWarn" class="tpl-warn hidden"></div>
 
+    <div class="note hidden" id="tplGreetingNote" style="margin-bottom:8px">
+      Your message opens with “Hi” or “Hello”. The app alternates between the two per recipient,
+      so not every message is word-for-word identical.
+    </div>
+
     <div class="preview-label">Preview — as it will look to a real recipient</div>
     <div class="preview-box" id="tplPreview"></div>
 
@@ -445,8 +463,11 @@
       This drives the <strong>WhatsApp Desktop app</strong> directly — keep its window visible and
       don't touch the mouse/keyboard while a batch runs. WhatsApp Desktop has no delivery status
       this app can read, so <strong>Submitted</strong> means the message was typed and sent, not
-      that arrival is confirmed — watch the app window to verify. Pacing follows your Settings
-      values, with a longer pause every 50, and the run stops automatically after 3 failures in a row.
+      that arrival is confirmed — watch the app window to verify. Sending speed:
+      <strong id="pacingNoteProfile">Balanced</strong>
+      (change it with ⚙). Gaps are random, the app takes regular breaks and stops at the
+      profile's daily/hourly limits, and the run stops automatically after 3 failures in a row.
+      <strong>Pause</strong> freezes the run; Resume brings WhatsApp back to the front.
     </p>
 
     <div class="progress-outer hidden" id="progressWrap"><div class="progress-inner" id="progressBar" style="width:0%"></div></div>
@@ -458,6 +479,7 @@
     <div class="btn-group">
       <button class="btn btn-ghost" id="backBtn" onclick="goStep(3)">← Back</button>
       <button class="btn btn-danger hidden" id="abortBtn" onclick="abortRun()">■ Abort</button>
+      <button class="btn btn-ghost hidden" id="pauseBtn" onclick="togglePause()">❚❚ Pause</button>
       <button class="btn btn-ghost hidden" id="startOverBtn" onclick="startOver()">⟲ Start over</button>
       <button class="btn btn-ghost hidden" id="retryBtn" onclick="retryFailed()">↻ Retry failed</button>
       <button class="btn btn-primary hidden" id="anotherBatchBtn" onclick="sendAnotherBatch()">+ Send another batch</button>
@@ -482,29 +504,16 @@
 </div>
 
 <div class="modal-back hidden" id="settingsModal">
-  <div class="modal" style="width:min(480px, 92vw); text-align:left">
-    <h3 style="margin-bottom:4px">Sending settings</h3>
-    <p>Every value here is editable — there's no built-in maximum. Slower and more randomised
-      is safer; this app will not stop you from setting it faster.</p>
-
-    <div class="row-2" style="margin-bottom:14px">
-      <div><label>Min delay between sends (sec)</label><input type="number" id="setMinDelay" min="0" /></div>
-      <div><label>Max delay between sends (sec)</label><input type="number" id="setMaxDelay" min="0" /></div>
-    </div>
-    <div class="row-2" style="margin-bottom:14px">
-      <div><label>Batch size (messages)</label><input type="number" id="setBatchSize" min="1" /></div>
-      <div><label>Daily cap (per sender)</label><input type="number" id="setDailyCap" min="0" /></div>
-    </div>
-    <div style="margin-bottom:14px">
-      <label>Default country code (no +)</label>
-      <input type="text" id="setDefaultCountry" placeholder="91" />
-    </div>
-
+  <div class="modal" style="width:min(540px, 92vw); text-align:left">
+    <h3 style="margin-bottom:4px">Sending speed</h3>
+    <p>How fast the app works through your list. Slower looks more like a person and keeps the
+      sending number safer. Every speed randomises its gaps, takes breaks, types the greeting key
+      by key, and stops at its daily and hourly limits.</p>
+    <div class="profile-list" id="profileList"><div class="note">Loading…</div></div>
     <p class="note" style="margin-bottom:16px">
-      <strong>Caution:</strong> shorter delays and bigger batches raise the chance WhatsApp flags
-      or bans the sending number. These defaults are a reasonable starting point, not a guarantee.
+      <strong>No speed is ban-proof.</strong> What protects a number most is sending to people who
+      expect your message and won't report it. See the Operations guide for warm-up advice.
     </p>
-
     <div class="btn-group" style="justify-content:center">
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn btn-primary" onclick="saveSettingsForm()">Save</button>
@@ -587,38 +596,80 @@ async function removeNumber(id) {
 function showAddNumber() { $('addModal').classList.remove('hidden'); $('newPhone').focus(); }
 function closeAddModal() { $('addModal').classList.add('hidden'); }
 
-// ── settings ──────────────────────────────────────────────────────────────
+// ── settings: sending speed ──────────────────────────────────────────────
+// The ⚙ panel picks one of three pacing profiles. The profiles themselves
+// come from the server (/api/pacing-profiles, i.e. pacing.js), so what's
+// described here is exactly what the send loop does.
+let pacingProfiles = null;
+let defaultProfileKey = 'balanced';
+let chosenProfile = 'balanced';
+
+async function loadPacingProfiles() {
+  if (pacingProfiles) return;
+  const meta = await (await fetch('/api/pacing-profiles')).json();
+  pacingProfiles = meta.profiles;
+  defaultProfileKey = meta.defaultProfile;
+}
+
+function secs(ms) { return Math.round(ms / 1000); }
+function mins(ms) { return Math.round(ms / 60000); }
+
+function describeProfile(p) {
+  return secs(p.gapMs[0]) + '–' + secs(p.gapMs[1]) + 's between messages · ' +
+    mins(p.breakMs[0]) + '–' + mins(p.breakMs[1]) + ' min break every ' + p.breakEvery[0] + '–' + p.breakEvery[1] + ' · ' +
+    'max ' + p.dailyCap + '/day' + (p.hourlyCap ? ', ' + p.hourlyCap + '/hour' : '');
+}
+
+function renderProfiles() {
+  $('profileList').innerHTML = Object.entries(pacingProfiles).map(([key, p]) => `
+    <div class="profile-card ${key === chosenProfile ? 'sel' : ''}" onclick="pickProfile('${esc(key)}')">
+      <input type="radio" name="pacingProfile" ${key === chosenProfile ? 'checked' : ''} />
+      <div>
+        <div class="profile-name">${esc(p.label)}${key === defaultProfileKey ? '<span class="profile-tag">Recommended</span>' : ''}</div>
+        <div class="profile-desc">${esc(p.description)}<br>${esc(describeProfile(p))}</div>
+      </div>
+    </div>`).join('');
+}
+
+function pickProfile(key) { chosenProfile = key; renderProfiles(); }
+
 async function showSettings() {
   try {
+    await loadPacingProfiles();
     const s = await (await fetch('/api/settings')).json();
-    $('setMinDelay').value = Math.round(s.sendMinDelayMs / 1000);
-    $('setMaxDelay').value = Math.round(s.sendMaxDelayMs / 1000);
-    $('setBatchSize').value = s.sendBatchSize;
-    $('setDailyCap').value = s.dailyCap;
-    $('setDefaultCountry').value = s.defaultCountry;
+    chosenProfile = s.pacingProfile || defaultProfileKey;
+    renderProfiles();
     $('settingsModal').classList.remove('hidden');
   } catch (e) { toast('Could not load settings: ' + e.message, 'error'); }
 }
 function closeSettings() { $('settingsModal').classList.add('hidden'); }
 
 async function saveSettingsForm() {
-  const payload = {
-    sendMinDelayMs: Math.round(Number($('setMinDelay').value) * 1000),
-    sendMaxDelayMs: Math.round(Number($('setMaxDelay').value) * 1000),
-    sendBatchSize: Number($('setBatchSize').value),
-    dailyCap: Number($('setDailyCap').value),
-    defaultCountry: $('setDefaultCountry').value.trim(),
-  };
+  if (sending) return toast('A batch is running. Pause or let it finish; the new speed applies to the next run', 'error');
   try {
     const res = await fetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ pacingProfile: chosenProfile })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to save settings');
     closeSettings();
-    toast('Settings saved', 'success');
+    toast('Sending speed: ' + pacingProfiles[data.pacingProfile].label, 'success');
+    renderPacingNote(data.pacingProfile);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderPacingNote(key) {
+  const p = pacingProfiles && pacingProfiles[key];
+  $('pacingNoteProfile').textContent = p ? p.label : key;
+}
+
+async function refreshPacingNote() {
+  try {
+    await loadPacingProfiles();
+    const s = await (await fetch('/api/settings')).json();
+    renderPacingNote(s.pacingProfile || defaultProfileKey);
+  } catch { /* the note keeps its static "Balanced" default */ }
 }
 
 // ── message template ─────────────────────────────────────────────────────
@@ -696,6 +747,9 @@ function renderTplPreview() {
     (posterSourceLabel ? `📎 [poster image attached — ${posterSourceLabel}]\n\n` : '') +
     (filled || '(empty — recipients would get nothing)');
   renderPosterActiveLine();
+  // Mirrors template.js's GREETING_RE: the note only shows when a real send
+  // would actually vary the greeting.
+  $('tplGreetingNote').classList.toggle('hidden', !/^\s*(hi|hello)(?![a-z])/i.test(text));
 
   const warnings = [];
   if (!text.trim()) warnings.push('The message is empty — it will be rejected when you try to save.');
@@ -1013,6 +1067,8 @@ async function startSend(dryRun) {
   $('backBtn').classList.add('hidden');
   $('retryBtn').classList.add('hidden');
   $('abortBtn').classList.remove('hidden');
+  $('pauseBtn').classList.remove('hidden');
+  setPausedUi(false);
   $('progressWrap').classList.remove('hidden');
   $('logTerminal').innerHTML = '';
   const counts = { submitted: 0, unknown: 0, skipped: 0, rehearsed: 0 };
@@ -1038,7 +1094,15 @@ async function startSend(dryRun) {
         if (!raw.trim()) continue;
         const evt = JSON.parse(raw);
         if (evt.type === 'aborted') { log('⛔ ' + evt.reason, 'log-fail'); continue; }
-        if (evt.type === 'pause') { log('… long pause ' + Math.round(evt.ms / 1000) + 's before the next batch', 'log-warn'); continue; }
+        if (evt.type === 'pause') {
+          log(evt.reason === 'hourly'
+            ? '… hourly limit reached, waiting ' + fmtDuration(evt.ms) + ' before the next message'
+            : '… taking a ' + fmtDuration(evt.ms) + ' break (normal: it keeps the number safe)', 'log-warn');
+          continue;
+        }
+        if (evt.type === 'paused') { setPausedUi(true); log('❚❚ Paused. Nothing new starts until you press Resume.', 'log-warn'); continue; }
+        if (evt.type === 'resumed') { setPausedUi(false); log('▶ Resumed: bringing WhatsApp back to the front', 'log-info'); continue; }
+        if (evt.type === 'info') { log(evt.message, 'log-info'); continue; }
         if (evt.type === 'error') { log('Error: ' + evt.error, 'log-fail'); continue; }
         if (evt.type === 'warning') { log('⚠ ' + evt.message, 'log-warn'); continue; }
 
@@ -1068,6 +1132,8 @@ async function startSend(dryRun) {
     sending = false;
     setTemplateEditorDisabled(false);
     $('abortBtn').classList.add('hidden');
+    $('pauseBtn').classList.add('hidden');
+    setPausedUi(false);
     $('backBtn').classList.remove('hidden');
     $('sendBtn').classList.remove('hidden');
     $('rehearseBtn').classList.remove('hidden');
@@ -1087,7 +1153,7 @@ function resetSendUi() {
   $('progressWrap').classList.add('hidden');
   $('logTerminal').innerHTML =
     '<div class="log-line"><span class="log-time">[ ready ]</span><span class="log-info">Awaiting send command…</span></div>';
-  ['abortBtn', 'retryBtn', 'startOverBtn', 'anotherBatchBtn'].forEach((id) => $(id).classList.add('hidden'));
+  ['abortBtn', 'pauseBtn', 'retryBtn', 'startOverBtn', 'anotherBatchBtn'].forEach((id) => $(id).classList.add('hidden'));
   $('sendBtn').classList.remove('hidden');
   $('backBtn').classList.remove('hidden');
 }
@@ -1149,6 +1215,40 @@ async function sendAnotherBatch() {
 async function abortRun() {
   await fetch('/api/campaigns/' + campaignId + '/abort', { method: 'POST' });
   log('Abort requested — finishing the current message first…', 'log-warn');
+}
+
+// Pause/Resume. The server's "paused"/"resumed" stream events are the source
+// of truth for the button state; the click updates it immediately too, so it
+// never looks unresponsive while the current message finishes.
+let runPaused = false;
+
+function setPausedUi(on) {
+  runPaused = on;
+  const b = $('pauseBtn');
+  b.textContent = on ? '▶ Resume' : '❚❚ Pause';
+  b.classList.toggle('btn-primary', on);
+  b.classList.toggle('btn-ghost', !on);
+}
+
+async function togglePause() {
+  const action = runPaused ? 'resume' : 'pause';
+  $('pauseBtn').disabled = true;
+  try {
+    const res = await fetch('/api/campaigns/' + campaignId + '/' + action, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not ' + action);
+    setPausedUi(action === 'pause');
+    if (action === 'pause') log('Pause requested. The message in progress (if any) finishes first.', 'log-warn');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    $('pauseBtn').disabled = false;
+  }
+}
+
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  return s >= 120 ? Math.round(s / 60) + ' min' : s + 's';
 }
 
 async function retryFailed() {
@@ -1273,6 +1373,7 @@ async function requestAccessibility() {
 
 loadNumbers();
 loadTemplate();
+refreshPacingNote();
 pollUpdateStatus();
 pollPlatformStatus();
 </script>

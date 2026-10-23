@@ -1,5 +1,5 @@
 // Platform dispatcher. wa/sender.js and server.js call this module's
-// 15-function contract without knowing which OS they're on — all the
+// 16-function contract without knowing which OS they're on — all the
 // platform-specific automation lives in desktop.win.js (PowerShell/Win32,
 // battle-tested) and desktop.mac.js (osascript/System Events, unverified —
 // see that file's header). Neither backend is required unless its platform
@@ -21,6 +21,7 @@ const CONTRACT = [
   "pasteImage",
   "pasteCaption",
   "discardAttachment",
+  "typeText",
 ];
 
 function unsupportedBackend(platform) {

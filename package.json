@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-blaster",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "private": true,
   "description": "Bulk WhatsApp invite automation, driving WhatsApp Desktop directly",
   "main": "main.js",
@@ -12,7 +12,8 @@
     "electron": "electron .",
     "dist": "electron-builder --publish never",
     "release": "electron-builder --publish always",
-    "mac:doctor": "node scripts/mac-doctor.js"
+    "mac:doctor": "node scripts/mac-doctor.js",
+    "test": "node --test"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -32,6 +33,7 @@
       "server.js",
       "config.js",
       "template.js",
+      "pacing.js",
       "update-status.js",
       "platform-status.js",
       "db/**/*",

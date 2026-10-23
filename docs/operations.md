@@ -1,75 +1,77 @@
-# Operations — sending safely
+# Operations: sending safely
 
-This app can send far faster than a human ever would, which is exactly what puts a WhatsApp
-number at risk of being flagged or banned. Nothing in the app stops you from sending faster
-than recommended here — the pacing settings are deliberately uncapped — but going faster is
-a real risk, not just a suggestion being cautious for no reason.
+This app drives the real WhatsApp Desktop app, so to WhatsApp every message looks like it
+came from you. That's also why a WhatsApp number can get restricted or banned if it sends
+like a machine. Since v1.6.0 the app tries hard not to. **No setting makes a number
+ban-proof**, though. Read the "What actually gets numbers banned" section below.
 
-**As of the current default, the inter-recipient delay is 0s** (changed from a randomised
-8-20s gap at explicit operator request, to cut per-recipient time down to roughly the ~8s the
-automation itself takes). This is a real reduction in anti-ban protection, not just a speed
-tweak — a fixed, back-to-back sending rhythm is closer to what an automated sender looks
-like than a randomised one. If a number gets flagged, raising the min/max delay in Settings
-back up is the first thing to try.
+## Sending speed (⚙ Settings)
 
-## The settings that matter
+Click ⚙ in the header and pick one of three speeds. The choice applies from the next run.
 
-All of these live in Step 1's Settings, editable any time (mid-run changes apply to the
-*next* run, not the one in progress):
+| Speed | Gap between messages | Break | Daily cap | Hourly cap |
+|---|---|---|---|---|
+| Cautious | random 45–120 s | 5–15 min every 6–10 messages | 100 | 25 |
+| **Balanced** (default) | random 20–60 s | 3–8 min every 8–15 messages | 150 | 40 |
+| Fast | random 8–25 s | 2–4 min every 15–25 messages | 200 | none |
 
-| Setting | Default | What it does |
-|---|---|---|
-| Min / max delay between sends | 0s / 0s | A random gap in this range before every send, on top of the ~8s the automation itself already takes per recipient (open chat, paste, verify, send). **Set to zero at explicit operator request** to remove that added wait — every send now moves to the next recipient the instant the previous one finishes. This was the app's main defence against looking automated; raising it back is just a Settings-panel edit. |
-| Batch size | 50 | After this many sends, the app takes a longer pause (2-4 minutes, randomised) before continuing. |
-| Daily cap | 200 | Hard stop — once this many messages have gone out from a sender number in the last 24 hours, the run skips every remaining recipient rather than continuing. |
-| Default country code | 91 | Applied to any bare 10-digit phone number in an uploaded CSV. |
+As a rough guide, Balanced gets through about 45–60 messages an hour, so 150 people take
+about 3–4 hours. Caps count every message this sender submitted across all campaigns in the
+last 24 hours / 60 minutes. When the hourly cap is reached the run **waits** and carries
+on by itself. When the daily cap is reached, the remaining rows are skipped (send them
+tomorrow with **Retry failed** or **Send another batch**).
+
+## What the app does to look human
+
+- **Random gaps and breaks.** No two gaps are the same, and the break interval changes
+  after every break, so there's no fixed rhythm.
+- **Typed greeting.** The first line of the message (e.g. "Hi Priya,") is typed key by key
+  at a human pace, the blank lines after it are typed too, and the rest is pasted. If the
+  first line has emoji or non-English letters, the whole message is pasted instead, because
+  key-by-key typing can't reproduce those reliably.
+- **Phone numbers typed digit by digit**, with uneven gaps.
+- **Jittered timing.** Every internal wait is randomly 0–40% longer than its minimum.
+- **A pause before typing and before sending**, like someone glancing at the chat and
+  re-reading the message.
+- **Hi / Hello variation.** If your message starts with "Hi" or "Hello", the app alternates
+  between the two, so the run isn't one identical message copied hundreds of times.
+
+## Pause, Resume, Abort
+
+- **Pause** stops the run from starting anything new, and freezes the countdown to the next
+  message. If a message is mid-way, it finishes first. You can use your computer while paused.
+- **Resume** brings WhatsApp back to the front and carries on.
+- **Abort** ends the run. Rows not reached are marked skipped.
+
+## What actually gets numbers banned
+
+Pacing helps, but WhatsApp's main signals are about the *people you message*:
+
+- **Recipients blocking or reporting you** is the biggest factor by far. Message people who
+  expect to hear from you (e.g. they registered for the event), and say who you are in
+  the first line.
+- **Cold contacts.** A list of people who have never messaged this number is riskier.
+  Use Cautious for those, and consider asking people to save your number or message you first.
+- **New numbers.** See warm-up below.
+- **Replies are good.** Messages that start conversations look like normal use, so invite a reply.
 
 ## Warming up a new number
 
-A WhatsApp number with no send history is more sensitive to bulk activity than one with an
-established pattern of normal use. Before a first real campaign on a new number:
-
-- Use it normally for a few days first — regular 1:1 chats, not just as a send-only number.
-- Start with a small batch (a few dozen, not a few hundred) on day one.
-- Increase gradually over several days rather than jumping straight to a full campaign.
-- Prefer the default pacing (or slower) for the first real campaign on any new number.
+- Use it normally for a few days first, with regular 1:1 chats, not just as a send-only number.
+- Day one: a few dozen messages on **Cautious**, not a full list.
+- Increase gradually over a week or two before using Balanced.
 
 ## Safe-batch practice
 
-- **Slower is genuinely safer.** If you're not in a hurry, raise the min/max delay rather
-  than lowering it.
-- **Split very large lists across multiple days** rather than one long run, even if the
-  daily cap would technically allow it in one sitting.
-- **Watch WhatsApp Desktop itself while a run is going** — if you see anything unusual (a
-  warning banner, being logged out, messages not appearing to send from the app's own UI),
-  stop the run immediately via Abort rather than letting it continue.
-- **A recipient list built from cold contacts** (people who don't know you and haven't
-  messaged you before) is riskier than a list of people who've previously interacted with
-  this number. If a campaign is going to a mostly-cold list, treat the pacing above as a
-  floor, not a target.
+- Split very large lists across several days, even if the cap would allow one long run.
+- Watch WhatsApp Desktop during a run. If you see a warning, a logout, or messages not
+  sending, press **Abort** immediately.
+- Don't change the speed to Fast to "catch up" on a number that has had any warning.
 
 ## If a number gets flagged or banned
 
-- Stop sending from it immediately — don't retry with the same number expecting the ban to
-  lift on its own.
-- WhatsApp bans usually come with either a temporary restriction (limits lift after a wait,
-  often 24-72 hours with no further violations) or a permanent ban with no recovery path.
-  There's no way to know in advance which one applies from outside WhatsApp itself.
-- Register a different number for the sender list before your next campaign, and treat it as
-  a brand-new number needing warm-up (see above) — don't assume the previous number's
-  history transfers.
-- Reduce pacing (slower delays, smaller batches) for future campaigns on any number that's
-  had a prior flag, even after a temporary restriction lifts.
-
-## Daily cap guidance
-
-The default (200/day) is a starting point, not a researched safe maximum — there is no
-single number that's safe for every WhatsApp account, since it depends heavily on account
-age, prior activity, and how "cold" the recipient list is. As a rough guide:
-
-- A brand-new or lightly-used number: stay well under the default, especially in the first
-  couple of weeks.
-- An established number with normal daily use: the default is a reasonable middle ground.
-- Raising the cap is easy (it's just a setting) — but raise it gradually between campaigns,
-  not all at once for a single big push, and watch how the number behaves afterward before
-  raising it again.
+- Stop sending from it immediately. Don't retry expecting the ban to lift on its own.
+- Restrictions are either temporary (often 24–72 hours with no further violations) or a
+  permanent ban. There's no way to know in advance which one applies.
+- Use a different number for the next campaign, and warm it up as a new number.
+- Use Cautious on any number that has ever had a flag, even after it lifts.

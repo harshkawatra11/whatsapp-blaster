@@ -28,6 +28,7 @@ Full docs live in [`docs/`](docs/README.md):
 npm install
 npm start          # plain Node, http://127.0.0.1:3000
 npm run electron    # run through the Electron shell
+npm test           # unit tests for pacing + template logic (node:test, no deps)
 npm run dist         # build an unsigned installer for the current OS into dist/, no publish
 npm run release      # manual publish path — build and publish a GitHub Release (needs GH_TOKEN)
 npm run mac:doctor   # macOS only — interactive verification harness for wa/desktop.mac.js

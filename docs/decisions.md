@@ -353,6 +353,41 @@ app's main defence against a bot-like sending pattern (see [operations.md](opera
 in favour of speed. It's a Settings-panel value, not a code constant, so it can be raised
 back per-sender without a rebuild if a number gets flagged.
 
+## v1.6.0: pacing profiles replace free-form numbers; humanised keystrokes
+
+The 0/0 delay above did what it was asked to do (speed), but it left every run as one
+fixed, back-to-back rhythm with identical text, which is the most bot-like pattern this app
+could produce. v1.6.0 reverses it at the operator's request, with these changes:
+
+- **Three named profiles instead of raw numbers** (`pacing.js`: Cautious / Balanced /
+  Fast, Balanced the default). The ⚙ panel now only picks one. The free-form min/max delay,
+  batch size and daily cap are retired (their DB rows are deleted at startup by
+  `dropRetiredSettings`). A teammate can no longer set "0 seconds" by accident, and the
+  profile carries gaps, breaks, daily cap and a new **hourly cap** together. Default
+  country code keeps its backend default (91) with no UI.
+- **Gaps** are the mean of two uniform draws (they cluster mid-range instead of spreading
+  flat). The break interval is re-rolled after every break, so there's no fixed cadence.
+- **Hybrid typing, not full typing.** Only the first line is typed key by key (then
+  Shift+Enter for the blank lines), and the rest is pasted. Typing every character through
+  SendKeys would take 30-60s+ per message, can't reliably produce emoji or non-Latin text,
+  and fails more often. Typing the greeting gets the human-looking part without that
+  cost. A first line that isn't plain ASCII (or contains `:`, which opens WhatsApp's emoji
+  picker) falls back to the old full paste. **Retries always use the old full paste**, as
+  the proven path.
+- **Jitter only lengthens.** Every keystroke wait in `wa/desktop.*.js` was tuned as a
+  minimum, so `jitter()` adds 0-40% and never subtracts. Humanising must not cost reliability.
+- **Greeting variation is limited to Hi/Hello** (operator request), applied only to the
+  first word. Full spintax was considered and not built.
+- **Pause/Resume** freezes the countdown rather than skipping it, and always re-focuses
+  WhatsApp before the next keystroke, since pausing nearly always means the operator clicked
+  elsewhere.
+- **Rehearsals** use short 2-4s gaps and no breaks or hourly waits (they never press Enter,
+  so they carry no ban risk). An aborted rehearsal also no longer writes "skipped" rows to
+  the DB.
+
+Stated plainly: none of this makes a number ban-proof. WhatsApp's strongest signals are
+recipients blocking or reporting, and cold-contact ratio. See [operations.md](operations.md).
+
 ## No login/auth gate; bound to 127.0.0.1 only
 
 An `APP_PASSWORD` auth gate existed early on, built for a scenario where the app might be

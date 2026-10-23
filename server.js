@@ -13,6 +13,7 @@ const audience = require("./wa/audience");
 const sender = require("./wa/sender");
 const attachments = require("./wa/attachments");
 const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("./template");
+const { PACING_PROFILES, DEFAULT_PACING_PROFILE } = require("./pacing");
 const updateStatus = require("./update-status");
 const platformStatus = require("./platform-status");
 
@@ -59,6 +60,11 @@ const uploadPoster = multer({
 // the id check in the abort route below.
 const activeAborts = new Map();
 
+// Per-campaign pause flags, same lifecycle as activeAborts: set to false when
+// a run starts, deleted when it ends, and only toggleable while that
+// campaign is actually running.
+const activePauses = new Map();
+
 // One send at a time: the send loop drives real OS-level state (the
 // clipboard, keyboard input, whatever window is foreground). Two concurrent
 // runs would interleave keystrokes into the same composer, fight over the
@@ -81,10 +87,9 @@ app.use(express.static(path.join(__dirname, "public")));
 app.get("/healthz", (req, res) => res.json({ ok: true }));
 
 // --- Settings ------------------------------------------------------------
-// Pacing, daily cap, default country, and the message template — editable
-// here rather than via .env/a file, since a packaged app's working
-// directory is inside a read-only install and neither would be reachable
-// for a teammate who needs to tune it.
+// The pacing profile, the message template, name fallback and poster.
+// Editable here rather than via .env/a file, since a packaged app's working
+// directory is inside a read-only install.
 
 app.get("/api/settings", async (req, res, next) => {
   try {
@@ -100,6 +105,13 @@ app.post("/api/settings", async (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// The three sending-speed profiles (pacing.js), so the ⚙ Settings panel
+// renders straight from the same numbers the send loop uses and the two can
+// never drift apart.
+app.get("/api/pacing-profiles", (req, res) => {
+  res.json({ profiles: PACING_PROFILES, defaultProfile: DEFAULT_PACING_PROFILE });
 });
 
 // --- Locally-uploaded poster -----------------------------------------------
@@ -360,6 +372,7 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
     // dry run or not, never overlapping.
     sendingCampaignId = campaignId;
     activeAborts.set(campaignId, false);
+    activePauses.set(campaignId, false);
     // A dry run must be indistinguishable from never having run at all,
     // apart from the log stream the operator watches live — the campaign's
     // own persisted status is exactly the kind of real state that must not
@@ -381,6 +394,7 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
       recipients,
       onEvent: (evt) => res.write(JSON.stringify(evt) + "\n"),
       isAborted: () => activeAborts.get(campaignId) === true,
+      isPaused: () => activePauses.get(campaignId) === true,
       dryRun,
     });
 
@@ -397,6 +411,7 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
 
     runFinished = true;
     activeAborts.delete(campaignId);
+    activePauses.delete(campaignId);
     sendingCampaignId = null;
     events.emit("send-finished");
     res.end();
@@ -411,6 +426,7 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
       } catch (_) {}
     }
     activeAborts.delete(campaignId);
+    activePauses.delete(campaignId);
     sendingCampaignId = null;
     events.emit("send-finished");
     res.end();
@@ -431,6 +447,24 @@ app.post("/api/campaigns/:id/abort", (req, res) => {
   res.json({ ok: true });
 });
 
+// Pause/Resume (v1.6.0). Cooperative, like abort: the loop stops starting
+// new recipients and freezes any gap/break countdown while paused. On resume
+// it re-focuses WhatsApp before the next keystroke. 404 unless this campaign
+// has an active run, for the same stale-flag reason as /abort.
+app.post("/api/campaigns/:id/pause", (req, res) => {
+  const id = req.params.id;
+  if (!activePauses.has(id)) return res.status(404).json({ error: "No active send for this campaign" });
+  activePauses.set(id, true);
+  res.json({ ok: true, paused: true });
+});
+
+app.post("/api/campaigns/:id/resume", (req, res) => {
+  const id = req.params.id;
+  if (!activePauses.has(id)) return res.status(404).json({ error: "No active send for this campaign" });
+  activePauses.set(id, false);
+  res.json({ ok: true, paused: false });
+});
+
 // --- Boot --------------------------------------------------------------
 // Bound to 127.0.0.1 only — this is a local-only tool with no reason to be
 // reachable from the LAN. Exported as startServer() (rather than only
@@ -445,6 +479,8 @@ function startServer() {
   // why: every install's saved poster is cleared exactly once so nobody
   // keeps sending an image left over from the per-row CSV override bug.
   settingsDb.clearStalePosterOnce(attachments.deleteLocalPoster);
+  // v1.6.0: drop the free-form pacing keys that pacingProfile replaced.
+  settingsDb.dropRetiredSettings();
   return new Promise((resolve, reject) => {
     const server = app.listen(config.port, "127.0.0.1", () => resolve(server));
     server.on("error", reject);

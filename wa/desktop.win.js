@@ -1,6 +1,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const { normaliseLineEndings, similarity, VERIFY_SIMILARITY_THRESHOLD } = require("./verify");
+const { jitter, randomBetween, typingDelays, digitDelays } = require("../pacing");
 
 // Drives the WhatsApp Desktop Windows app via keyboard automation. No new
 // dependency: everything needed (window focus, SendKeys, clipboard) ships
@@ -47,6 +48,12 @@ const OWN_PID = process.pid;
 // every script's normal runtime (a few seconds of Start-Sleep at most) but
 // bounds the worst case.
 const PS_TIMEOUT_MS = 20000;
+
+// openChatByNumber (digit-by-digit typing) and typeText (key-by-key typing)
+// legitimately run longer than the 20s default above: the humanised per-key
+// delays alone can add 10-30s. A separate, longer ceiling keeps the hang
+// protection without killing a normal slow-typed run.
+const LONG_PS_TIMEOUT_MS = 60000;
 
 function runPowerShell(script, timeoutMs = PS_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -312,18 +319,25 @@ function sendKeysEscape(s) {
 // only whether the resulting composer accepted a paste (verifyComposer,
 // below). That was already true of this function when it was the fallback;
 // it now carries the whole flow instead of a rare edge case.
+//
+// v1.6.0: the digits are typed one at a time with uneven human-like gaps
+// (pacing.digitDelays) instead of one instant SendWait burst, and every
+// settle wait is jittered (never shortened, see pacing.jitter).
 async function openChatByNumber(digits) {
   await ensureForeground();
-  const keys = sendKeysEscape(digits);
+  const delays = digitDelays(digits);
+  const typed = Array.from(String(digits))
+    .map((d, i) => `[System.Windows.Forms.SendKeys]::SendWait('${psQuote(sendKeysEscape(d))}')\nStart-Sleep -Milliseconds ${delays[i]}`)
+    .join("\n");
   const script = `${PS_PREAMBLE}
 [System.Windows.Forms.SendKeys]::SendWait("^n")
-Start-Sleep -Milliseconds 900
-[System.Windows.Forms.SendKeys]::SendWait('${psQuote(keys)}')
-Start-Sleep -Milliseconds 2500
+Start-Sleep -Milliseconds ${jitter(900)}
+${typed}
+Start-Sleep -Milliseconds ${jitter(2500)}
 [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-Start-Sleep -Milliseconds 1500
+Start-Sleep -Milliseconds ${jitter(1500)}
 `;
-  await runPowerShell(script);
+  await runPowerShell(script, LONG_PS_TIMEOUT_MS);
 }
 
 // Pastes `text` into whatever currently holds focus, WITHOUT sending.
@@ -342,15 +356,36 @@ async function pasteIntoComposer(text) {
 $bytes = [Convert]::FromBase64String('${b64}')
 $msg = [System.Text.Encoding]::Unicode.GetString($bytes)
 [System.Windows.Forms.SendKeys]::SendWait("^a")
-Start-Sleep -Milliseconds 150
+Start-Sleep -Milliseconds ${jitter(150)}
 [System.Windows.Forms.SendKeys]::SendWait("{DEL}")
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds ${jitter(200)}
 Set-Clipboard -Value $msg
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds ${jitter(300)}
 [System.Windows.Forms.SendKeys]::SendWait("^v")
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds ${jitter(500)}
 `;
   await runPowerShell(script);
+}
+
+// Types `text` key by key into whatever holds focus, with human-like uneven
+// gaps (pacing.typingDelays), then presses Shift+Enter `lineBreaks` times
+// (Shift+Enter is WhatsApp's newline; plain Enter would send). Does NOT clear
+// the composer first, and does NOT send. wa/sender.js only ever passes the
+// message's first line here, and only after pacing.splitForTyping has
+// confirmed it is plain ASCII that SendKeys can type reliably. Everything
+// else is still pasted.
+async function typeText(text, lineBreaks = 0) {
+  await ensureForeground();
+  const chars = Array.from(String(text));
+  const delays = typingDelays(text);
+  const lines = chars.map(
+    (ch, i) => `[System.Windows.Forms.SendKeys]::SendWait('${psQuote(sendKeysEscape(ch))}')\nStart-Sleep -Milliseconds ${delays[i]}`
+  );
+  for (let i = 0; i < lineBreaks; i++) {
+    lines.push(`[System.Windows.Forms.SendKeys]::SendWait("+{ENTER}")\nStart-Sleep -Milliseconds ${randomBetween(120, 260)}`);
+  }
+  if (lines.length === 0) return;
+  await runPowerShell(`${PS_PREAMBLE}\n${lines.join("\n")}`, LONG_PS_TIMEOUT_MS);
 }
 
 // Poster image attach via clipboard paste (CF_DIB / Clipboard.SetImage) —
@@ -379,7 +414,7 @@ $img.Dispose()
 // empty field.
 async function pasteImage() {
   await ensureForeground();
-  await runPowerShell(`${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("^v")\nStart-Sleep -Milliseconds 1500`);
+  await runPowerShell(`${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("^v")\nStart-Sleep -Milliseconds ${jitter(1500)}`);
 }
 
 // Same non-destructive rule as pasteImage — no Ctrl+A/Delete — for typing
@@ -391,9 +426,9 @@ async function pasteCaption(text) {
 $bytes = [Convert]::FromBase64String('${b64}')
 $msg = [System.Text.Encoding]::Unicode.GetString($bytes)
 Set-Clipboard -Value $msg
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds ${jitter(300)}
 [System.Windows.Forms.SendKeys]::SendWait("^v")
-Start-Sleep -Milliseconds 500
+Start-Sleep -Milliseconds ${jitter(500)}
 `);
 }
 
@@ -401,7 +436,7 @@ Start-Sleep -Milliseconds 500
 // Escape, not the destructive Ctrl+A/Delete clearComposer() uses.
 async function discardAttachment() {
   await runPowerShell(
-    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds 200; [System.Windows.Forms.SendKeys]::SendWait("{ESC}")`
+    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds ${jitter(200)}; [System.Windows.Forms.SendKeys]::SendWait("{ESC}")`
   ).catch(() => {});
 }
 
@@ -424,11 +459,11 @@ async function verifyComposer(text) {
   const sentinel = `WAB-VERIFY-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const script = `${PS_PREAMBLE}
 Set-Clipboard -Value '${psQuote(sentinel)}'
-Start-Sleep -Milliseconds 250
+Start-Sleep -Milliseconds ${jitter(250)}
 [System.Windows.Forms.SendKeys]::SendWait("^a")
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds ${jitter(200)}
 [System.Windows.Forms.SendKeys]::SendWait("^c")
-Start-Sleep -Milliseconds 400
+Start-Sleep -Milliseconds ${jitter(400)}
 $captured = try { Get-Clipboard -Raw -ErrorAction SilentlyContinue } catch { $null }
 if ($null -eq $captured) { $captured = "" }
 [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($captured))
@@ -461,9 +496,9 @@ async function pressEnterToSend() {
   await ensureForeground();
   const script = `${PS_PREAMBLE}
 [System.Windows.Forms.SendKeys]::SendWait("{RIGHT}")
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds ${jitter(200)}
 [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds ${jitter(800)}
 `;
   await runPowerShell(script);
 }
@@ -473,7 +508,7 @@ Start-Sleep -Milliseconds 800
 // set of keystrokes.
 async function resetToCleanState() {
   await runPowerShell(
-    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds 200; [System.Windows.Forms.SendKeys]::SendWait("{ESC}")`
+    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds ${jitter(200)}; [System.Windows.Forms.SendKeys]::SendWait("{ESC}")`
   ).catch(() => {});
 }
 
@@ -514,7 +549,7 @@ async function closeChat() {
 async function clearComposer() {
   await ensureForeground();
   await runPowerShell(
-    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("^a"); Start-Sleep -Milliseconds 150; [System.Windows.Forms.SendKeys]::SendWait("{DEL}")`
+    `${PS_PREAMBLE}\n[System.Windows.Forms.SendKeys]::SendWait("^a"); Start-Sleep -Milliseconds ${jitter(150)}; [System.Windows.Forms.SendKeys]::SendWait("{DEL}")`
   ).catch(() => {});
 }
 
@@ -526,6 +561,7 @@ module.exports = {
   focus,
   openChatByNumber,
   pasteIntoComposer,
+  typeText,
   verifyComposer,
   pressEnterToSend,
   resetToCleanState,

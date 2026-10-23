@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 const { normaliseLineEndings, similarity, VERIFY_SIMILARITY_THRESHOLD } = require("./verify");
+const { jitter, randomBetween, typingDelays, digitDelays } = require("../pacing");
 
 // Drives WhatsApp for Mac (the native Catalyst app) via System Events
 // keystroke automation, the same "spawn a helper that ships with the OS, add
@@ -50,6 +51,17 @@ const TIMINGS = {
 };
 
 const OSA_TIMEOUT_MS = 20000;
+
+// Same reasoning as desktop.win.js's LONG_PS_TIMEOUT_MS: humanised
+// digit-by-digit and key-by-key typing legitimately outlasts the 20s default.
+const LONG_OSA_TIMEOUT_MS = 60000;
+
+// AppleScript `delay` takes seconds. Every TIMINGS value is a tuned minimum,
+// so it's jittered upward only (pacing.jitter) and never shortened. TIMINGS
+// itself stays unjittered because `npm run mac:doctor` prints and edits it.
+function d(ms) {
+  return (jitter(ms) / 1000).toFixed(3);
+}
 
 function runOsascript(script, timeoutMs = OSA_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -305,20 +317,25 @@ function keystrokeScript(lines) {
 // (verifyComposer, below).
 async function openChatByNumber(digits) {
   await ensureForeground();
+  const delays = digitDelays(digits);
+  const typed = Array.from(String(digits))
+    .map((ch, i) => `  keystroke "${asQuote(ch)}"\n  delay ${(delays[i] / 1000).toFixed(3)}`)
+    .join("\n");
   await runOsascript(
     keystrokeScript(`
   keystroke "n" using command down
-  delay ${TIMINGS.afterNewChat / 1000}
+  delay ${d(TIMINGS.afterNewChat)}
   key code 48
   key code 48
-  delay ${TIMINGS.afterTab / 1000}
-  keystroke "${asQuote(digits)}"
-  delay ${TIMINGS.afterDigits / 1000}
+  delay ${d(TIMINGS.afterTab)}
+${typed}
+  delay ${d(TIMINGS.afterDigits)}
   key code 125
-  delay ${TIMINGS.afterArrowDown / 1000}
+  delay ${d(TIMINGS.afterArrowDown)}
   key code 36
-  delay ${TIMINGS.afterChatOpen / 1000}
-`)
+  delay ${d(TIMINGS.afterChatOpen)}
+`),
+    LONG_OSA_TIMEOUT_MS
   );
 }
 
@@ -331,14 +348,30 @@ async function pasteIntoComposer(text) {
   await runOsascript(
     keystrokeScript(`
   keystroke "a" using command down
-  delay ${TIMINGS.afterSelectAll / 1000}
+  delay ${d(TIMINGS.afterSelectAll)}
   key code 51
-  delay ${TIMINGS.afterDelete / 1000}
-  delay ${TIMINGS.afterClipboardSet / 1000}
+  delay ${d(TIMINGS.afterDelete)}
+  delay ${d(TIMINGS.afterClipboardSet)}
   keystroke "v" using command down
-  delay ${TIMINGS.afterPaste / 1000}
+  delay ${d(TIMINGS.afterPaste)}
 `)
   );
+}
+
+// Mac twin of desktop.win.js's typeText: types `text` key by key with
+// human-like gaps, then Shift+Return `lineBreaks` times (newline without
+// sending). No clearing, no sending. Only ever called with a first line that
+// pacing.splitForTyping has confirmed is plain ASCII.
+async function typeText(text, lineBreaks = 0) {
+  await ensureForeground();
+  const chars = Array.from(String(text));
+  const delays = typingDelays(text);
+  const lines = chars.map((ch, i) => `  keystroke "${asQuote(ch)}"\n  delay ${(delays[i] / 1000).toFixed(3)}`);
+  for (let i = 0; i < lineBreaks; i++) {
+    lines.push(`  key code 36 using shift down\n  delay ${(randomBetween(120, 260) / 1000).toFixed(3)}`);
+  }
+  if (lines.length === 0) return;
+  await runOsascript(keystrokeScript(lines.join("\n")), LONG_OSA_TIMEOUT_MS);
 }
 
 function tempPngPath(sourcePath) {
@@ -385,7 +418,7 @@ async function pasteImage() {
   await runOsascript(
     keystrokeScript(`
   keystroke "v" using command down
-  delay ${TIMINGS.afterImagePaste / 1000}
+  delay ${d(TIMINGS.afterImagePaste)}
 `)
   );
 }
@@ -395,9 +428,9 @@ async function pasteCaption(text) {
   await pbcopy(text);
   await runOsascript(
     keystrokeScript(`
-  delay ${TIMINGS.afterClipboardSet / 1000}
+  delay ${d(TIMINGS.afterClipboardSet)}
   keystroke "v" using command down
-  delay ${TIMINGS.afterPaste / 1000}
+  delay ${d(TIMINGS.afterPaste)}
 `)
   );
 }
@@ -411,7 +444,7 @@ async function discardAttachment() {
   await runOsascript(
     keystrokeScript(`
   key code 53
-  delay ${TIMINGS.afterEscape / 1000}
+  delay ${d(TIMINGS.afterEscape)}
   key code 53
 `)
   ).catch(() => {});
@@ -426,9 +459,9 @@ async function verifyComposer(text) {
   await runOsascript(
     keystrokeScript(`
   keystroke "a" using command down
-  delay ${TIMINGS.afterVerifySelectAll / 1000}
+  delay ${d(TIMINGS.afterVerifySelectAll)}
   keystroke "c" using command down
-  delay ${TIMINGS.afterVerifyCopy / 1000}
+  delay ${d(TIMINGS.afterVerifyCopy)}
 `)
   );
   const got = await pbpaste().catch(() => "");
@@ -446,9 +479,9 @@ async function pressEnterToSend() {
   await runOsascript(
     keystrokeScript(`
   key code 124
-  delay ${TIMINGS.afterRightArrow / 1000}
+  delay ${d(TIMINGS.afterRightArrow)}
   key code 36
-  delay ${TIMINGS.afterSend / 1000}
+  delay ${d(TIMINGS.afterSend)}
 `)
   );
 }
@@ -457,7 +490,7 @@ async function resetToCleanState() {
   await runOsascript(
     keystrokeScript(`
   key code 53
-  delay ${TIMINGS.afterEscape / 1000}
+  delay ${d(TIMINGS.afterEscape)}
   key code 53
 `)
   ).catch(() => {});
@@ -472,7 +505,7 @@ async function clearComposer() {
   await runOsascript(
     keystrokeScript(`
   keystroke "a" using command down
-  delay ${TIMINGS.afterSelectAll / 1000}
+  delay ${d(TIMINGS.afterSelectAll)}
   key code 51
 `)
   ).catch(() => {});
@@ -500,6 +533,7 @@ module.exports = {
   focus,
   openChatByNumber,
   pasteIntoComposer,
+  typeText,
   verifyComposer,
   pressEnterToSend,
   resetToCleanState,

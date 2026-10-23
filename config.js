@@ -8,11 +8,11 @@ function int(name, fallback) {
   return n;
 }
 
-// Everything that's actually tunable by the operator (pacing, daily cap,
-// default country) lives in the settings table (db/settings.js), editable
-// from the app's Settings panel — not here. A packaged app's working
-// directory is inside a read-only install (or absent), so .env is not a
-// place a non-technical teammate could ever reach to change a limit.
+// Everything that's actually tunable by the operator (the pacing profile,
+// the message template, the poster) lives in the settings table
+// (db/settings.js), editable from the app itself, not here. A packaged app's
+// working directory is inside a read-only install (or absent), so .env is
+// not a place a non-technical teammate could ever reach.
 //
 // This file only holds things that are genuinely fixed per install: the
 // port the local server listens on, and the database file path.

@@ -111,12 +111,12 @@ async function updateRecipientResult(campaignId, sno, { state, error, sentAt }) 
   ).run(state, error ?? null, sentAt ? sentAt.getTime() : null, campaignId, sno);
 }
 
-// Used to enforce DAILY_CAP: how many messages this sender has actually
-// submitted across ALL campaigns in the last 24 hours. The cutoff is
-// computed in JS as a plain epoch-ms number, replacing Postgres's
-// `now() - interval '24 hours'`.
-async function countRecentSends(senderPhone) {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+// How many messages this sender has actually submitted, across ALL
+// campaigns, in the trailing window: 24h by default, for the daily cap.
+// wa/sender.js's hourly cap uses msUntilHourlySlot below instead. The cutoff
+// is plain epoch-ms computed in JS.
+async function countRecentSends(senderPhone, windowMs = 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - windowMs;
   const row = db
     .prepare(
       `SELECT COUNT(*) AS c FROM recipients r
@@ -125,6 +125,25 @@ async function countRecentSends(senderPhone) {
     )
     .get(senderPhone, cutoff);
   return row.c;
+}
+
+// Hourly cap (v1.6.0 pacing profiles): returns 0 if another send fits in
+// the trailing hour right now, otherwise how many ms until the oldest send
+// that's in the way ages out of it (+1s of margin).
+async function msUntilHourlySlot(senderPhone, hourlyCap) {
+  const windowMs = 60 * 60 * 1000;
+  const now = Date.now();
+  const rows = db
+    .prepare(
+      `SELECT r.sent_at AS t FROM recipients r
+       JOIN campaigns c ON c.id = r.campaign_id
+       WHERE c.sender_phone = ? AND r.state = 'submitted' AND r.sent_at > ?
+       ORDER BY r.sent_at ASC`
+    )
+    .all(senderPhone, now - windowMs);
+  if (rows.length < hourlyCap) return 0;
+  const blocking = rows[rows.length - hourlyCap];
+  return Math.max(0, blocking.t + windowMs - now) + 1000;
 }
 
 // "Start over" cleanup. Scoped to THIS sender only. `recipients` cascades
@@ -141,5 +160,6 @@ module.exports = {
   getRecipientsBySnos,
   updateRecipientResult,
   countRecentSends,
+  msUntilHourlySlot,
   purgeCampaignsForSender,
 };

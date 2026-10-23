@@ -118,9 +118,13 @@ Click **Send Invites**. From this point:
   recipient, but it's best avoided.
 - A small always-on-top status bar in the corner of your screen shows live progress, since
   the main app window may be behind WhatsApp Desktop during a run.
-- Sends are deliberately paced with random gaps and occasional longer pauses — this is not a
-  bug, it's what keeps the sending number safe (see [operations.md](operations.md)).
-- If you need to stop, click **Abort**. It finishes whatever message is currently in
+- Sends are deliberately paced with random gaps, a typed greeting and regular breaks. That's
+  not a bug, it's what keeps the sending number safe. Pick the speed with **⚙** in the
+  header (Cautious / Balanced / Fast; Balanced is the default). See
+  [operations.md](operations.md).
+- **Pause** freezes the run (the message in progress finishes first) so you can use your
+  computer; **Resume** brings WhatsApp back to the front and carries on.
+- If you need to stop for good, click **Abort**. It finishes whatever message is currently in
   progress and then stops before starting the next one.
 
 ## What "Submitted" actually means
@@ -152,6 +156,8 @@ exactly as you want participants to receive it. To personalise it:
 - Click **+ S.No.** or **+ Phone** the same way, if you want either in the message.
 - The **preview** below the box always shows exactly what a real recipient would see, using
   a row from your uploaded CSV once one's loaded (or a sample name before that).
+- If your message starts with **Hi** or **Hello**, the app alternates between the two per
+  recipient, so not every message is word-for-word identical. Nothing else in your text changes.
 - If a row in your CSV has a blank name, the app substitutes whatever you've set as the
   fallback (defaults to "there" — "Hi there,") instead of literally sending "Hi {{name}},".
 - Click **Save message** when you're happy with it. It's saved immediately and used by every

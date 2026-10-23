@@ -1,27 +1,18 @@
 const db = require("./pool");
 const { DEFAULT_TEMPLATE, DEFAULT_NAME_FALLBACK } = require("../template");
+const { PACING_PROFILES, DEFAULT_PACING_PROFILE, isProfileKey } = require("../pacing");
 
-// User-tunable send settings, editable from the app's Settings panel. This
-// replaces .env-only pacing config — a packaged app's working directory is
-// inside a read-only install (or absent), so .env is unreachable there.
-// Deliberately no hard ceiling on any of these, per the original product
-// requirement ("sensible defaults shown in the UI, every limit editable").
+// Operator settings, stored in the SQLite `settings` table rather than
+// .env. A packaged app's working directory is inside a read-only install
+// (or absent), so .env is unreachable there. Sending speed is chosen as one
+// of three named pacing profiles (pacing.js) from the ⚙ Settings panel. The
+// message template, name fallback and poster are edited in Step 1.
+// defaultCountry has no UI anymore, but stays here as a backend default.
 const DEFAULTS = {
-  // Changed from 8000/20000 at explicit operator request: the automation
-  // steps themselves (open chat ~3s, paste+verify ~3s, send ~2s — see
-  // wa/desktop.win.js's TIMINGS-equivalent Start-Sleep calls) already take
-  // about 8s per recipient, and that WAS the dominant cost; the randomised
-  // 8-20s gap this replaces was stacked ON TOP of that, which is what made
-  // ~4-5 recipients take ~2 minutes. Zero here means "move to the next
-  // recipient the instant this one's automation finishes" — no added idle
-  // wait. This removes the app's main defence against looking automated
-  // (see docs/operations.md) — raising it back is just a Settings-panel
-  // edit, no code change, if send-safety turns out to matter more than
-  // speed for a given number.
-  sendMinDelayMs: 0,
-  sendMaxDelayMs: 0,
-  sendBatchSize: 50,
-  dailyCap: 200,
+  // v1.6.0: replaces sendMinDelayMs / sendMaxDelayMs / sendBatchSize /
+  // dailyCap. One of the keys of pacing.js's PACING_PROFILES; that profile
+  // supplies the gaps, breaks, daily cap and hourly cap together.
+  pacingProfile: DEFAULT_PACING_PROFILE,
   defaultCountry: "91",
   messageTemplate: DEFAULT_TEMPLATE,
   nameFallback: DEFAULT_NAME_FALLBACK,
@@ -42,20 +33,13 @@ const DEFAULTS = {
   posterUploadFilename: "",
 };
 
-const NUMERIC_KEYS = new Set(["sendMinDelayMs", "sendMaxDelayMs", "sendBatchSize", "dailyCap"]);
-
 async function getSettings() {
   const rows = db.prepare("SELECT key, value FROM settings").all();
   const stored = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   const merged = { ...DEFAULTS, ...stored };
-  for (const key of NUMERIC_KEYS) {
-    const n = Number(merged[key]);
-    // A corrupt/non-numeric stored value previously became NaN here and
-    // silently disabled whatever depended on it downstream — e.g.
-    // `remaining = dailyCap - sent` becomes NaN, and `NaN <= 0` is false,
-    // so the daily cap stopped applying with no error anywhere.
-    merged[key] = Number.isFinite(n) ? n : DEFAULTS[key];
-  }
+  // A stale or hand-edited value must never leave a run without a pacing
+  // profile. Fall back to the default rather than failing the send.
+  if (!isProfileKey(merged.pacingProfile)) merged.pacingProfile = DEFAULT_PACING_PROFILE;
   return merged;
 }
 
@@ -63,28 +47,10 @@ async function saveSettings(partial) {
   const current = await getSettings();
   const next = { ...current, ...partial };
 
-  // Type-checking MUST run before the min/max comparison below. String
-  // input ("8000" vs "20000") previously hit the comparison first, which
-  // compares lexicographically — "20000" < "8000" is true — and threw a
-  // misleading "max must be >= min" error for what was actually a type
-  // problem.
-  for (const key of NUMERIC_KEYS) {
-    if (!Number.isFinite(next[key])) {
-      throw new Error(`${key} must be a number`);
-    }
-  }
-  if (next.sendBatchSize < 1) {
-    // 0 previously passed a ">= 0" check, then `attempts % 0` is NaN in the
-    // send loop, so `=== 0` was never true and the long batch pause simply
-    // never fired — no error, no warning, just silently faster sending.
-    throw new Error("Batch size must be at least 1");
-  }
-  for (const key of NUMERIC_KEYS) {
-    if (key === "sendBatchSize") continue;
-    if (next[key] < 0) throw new Error(`${key} must be a non-negative number`);
-  }
-  if (next.sendMaxDelayMs < next.sendMinDelayMs) {
-    throw new Error("Max delay must be >= min delay");
+  if (!isProfileKey(next.pacingProfile)) {
+    throw new Error(
+      `Unknown sending speed "${next.pacingProfile}". Pick one of: ${Object.keys(PACING_PROFILES).join(", ")}`
+    );
   }
 
   // defaultCountry was previously unvalidated and flowed straight into
@@ -201,4 +167,15 @@ function clearStalePosterOnce(deleteLocalFile) {
   }
 }
 
-module.exports = { getSettings, saveSettings, seedTemplateIfMissing, clearStalePosterOnce };
+// v1.6.0 cleanup: the free-form pacing keys replaced by pacingProfile. Plain
+// idempotent DELETEs with no marker key needed, since deleting an absent row
+// is a no-op. This leaves no stale "0/0 delay" rows behind to confuse anyone
+// reading the DB.
+const RETIRED_SETTING_KEYS = ["sendMinDelayMs", "sendMaxDelayMs", "sendBatchSize", "dailyCap"];
+
+function dropRetiredSettings() {
+  const del = db.prepare("DELETE FROM settings WHERE key = ?");
+  for (const key of RETIRED_SETTING_KEYS) del.run(key);
+}
+
+module.exports = { getSettings, saveSettings, seedTemplateIfMissing, clearStalePosterOnce, dropRetiredSettings };
